@@ -72,6 +72,7 @@ async function sendTelegram(message) {
 
 async function scan() {
   console.log('Scan avviato...');
+  let alertCount = 0;
   try {
     const tickersData = await get('/v5/market/tickers?category=linear');
     const list = tickersData.result.list;
@@ -122,10 +123,14 @@ async function scan() {
 
         await sendTelegram(message);
         console.log(`🚀 ALERT INVIATO: ${symbol} - Bid ${(bidRatio * 100).toFixed(2)}%`);
+        alertCount++;
 
       } catch (e) {
         console.error(`Errore su ${symbol}:`, e.message);
       }
+    }
+    if (alertCount === 0) {
+      console.log('Nessun setup trovato');
     }
     console.log('Scan completato');
   } catch (e) {
