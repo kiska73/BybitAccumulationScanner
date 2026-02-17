@@ -1,9 +1,11 @@
 const fetch = require('node-fetch');
 const cron = require('node-cron');
 
+// HARDCODED - bot tuo
+const TELEGRAM_TOKEN = '8565429677:AAENzErYwq5PXmfDJe616GMYwARPnxCBYgk';
+const TELEGRAM_CHAT_ID = '8565429677';
+
 const BASE_URL = 'https://api.bybit.com';
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 async function get(endpoint) {
   const response = await fetch(BASE_URL + endpoint);
@@ -55,10 +57,6 @@ async function getBidRatioNotional(symbol) {
 }
 
 async function sendTelegram(message) {
-  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.log('Telegram non configurato - alert:', message);
-    return;
-  }
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
   await fetch(url, {
     method: 'POST',
@@ -69,12 +67,12 @@ async function sendTelegram(message) {
       parse_mode: 'HTML',
       disable_web_page_preview: true
     })
-  });
+  }).catch(err => console.error('Errore Telegram:', err.message));
 }
 
 async function scan() {
+  console.log('Scan avviato...');
   try {
-    console.log('Inizio scan...');
     const tickersData = await get('/v5/market/tickers?category=linear');
     const list = tickersData.result.list;
 
@@ -93,19 +91,18 @@ async function scan() {
 
     for (const symbol of topSymbols) {
       try {
-        await new Promise(resolve => setTimeout(resolve, 100)); // rate limit safe
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         const klineData = await get(`/v5/market/kline?category=linear&symbol=${symbol}&interval=60&limit=2`);
         const klines = klineData.result.list;
         if (klines.length < 2) continue;
 
-        const lastClosed = klines[0]; // index 0 = candela chiusa più recente
+        const lastClosed = klines[0];
         if (!isHammer(lastClosed)) continue;
 
         const bidRatio = await getBidRatioNotional(symbol);
         if (bidRatio < 0.65) continue;
 
-        // Trova ticker per price + funding
         const ticker = list.find(t => t.symbol === symbol);
         if (!ticker) continue;
 
@@ -130,6 +127,7 @@ async function scan() {
         console.error(`Errore su ${symbol}:`, e.message);
       }
     }
+    console.log('Scan completato');
   } catch (e) {
     console.error('Errore scan generale:', e.message);
   }
@@ -140,4 +138,5 @@ cron.schedule('1 * * * *', () => {
   scan();
 });
 
-console.log('Scanner Bybit Node.js avviato. Primo scan al prossimo minuto 01');
+console.log('Scanner Bybit avviato - primo scan al prossimo :01');
+scan(); // scan immediato all'avvio, così testi subito
