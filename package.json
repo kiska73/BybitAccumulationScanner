@@ -1,0 +1,16 @@
+{
+  "name": "bybit-accumulation-scanner",
+  "version": "1.0.0",
+  "description": "Scanner accumulazione Bybit perpetual",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
