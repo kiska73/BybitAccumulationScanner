@@ -1,7 +1,7 @@
 const fetch = require('node-fetch');
 const cron = require('node-cron');
 
-// HARDCODED - bot tuo
+// HARDCODED - bot tuo (consiglio di passare a env var in produzione)
 const TELEGRAM_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
 const TELEGRAM_CHAT_ID = '820279313';
 
@@ -73,6 +73,8 @@ async function sendTelegram(message) {
 async function scan() {
   console.log('Scan avviato...');
   let alertCount = 0;
+  const now = Date.now();
+
   try {
     const tickersData = await get('/v5/market/tickers?category=linear');
     const list = tickersData.result.list;
@@ -92,13 +94,25 @@ async function scan() {
 
     for (const symbol of topSymbols) {
       try {
+        // Piccolo delay per non stressare troppo l'API
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        const klineData = await get(`/v5/market/kline?category=linear&symbol=${symbol}&interval=60&limit=2`);
+        // Richiediamo 3 candele per sicurezza
+        const klineData = await get(`/v5/market/kline?category=linear&symbol=${symbol}&interval=60&limit=3`);
         const klines = klineData.result.list;
         if (klines.length < 2) continue;
 
-        const lastClosed = klines[0];
+        // klines[1] = ultima candela chiusa (al minuto 01 è sempre questa)
+        const lastClosed = klines[1];
+
+        // Controllo timestamp: assicuriamoci che sia realmente chiusa
+        const candleStart = parseInt(lastClosed[0]);
+        const candleEnd = candleStart + 3600000; // 1 ora in ms
+        if (candleEnd > now) {
+          console.log(`Candela non ancora chiusa per ${symbol}`);
+          continue;
+        }
+
         if (!isHammer(lastClosed)) continue;
 
         const bidRatio = await getBidRatioNotional(symbol);
@@ -125,6 +139,7 @@ async function scan() {
         console.error(`Errore su ${symbol}:`, e.message);
       }
     }
+
     if (alertCount === 0) {
       console.log('Nessun setup trovato');
     }
@@ -134,10 +149,10 @@ async function scan() {
   }
 }
 
-// Scheduler: ogni ora al minuto 01
+// Scheduler: esegue esattamente 1 minuto dopo la chiusura della candela 1H
 cron.schedule('1 * * * *', () => {
   scan();
 });
 
 console.log('Scanner Bybit avviato - primo scan al prossimo :01');
-scan(); // scan immediato all'avvio, così testi subito
+scan(); // scan immediato all'avvio per testing
