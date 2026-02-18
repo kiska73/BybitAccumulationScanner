@@ -108,16 +108,12 @@ async function scan() {
         if (!ticker) continue;
 
         const price = parseFloat(ticker.lastPrice);
-        const funding = parseFloat(ticker.fundingRate);
-
-        const fundingEmoji = funding < 0 ? '🔥 NEGATIVO (shorts pagano!)' : '❄️ positivo';
 
         const message = `🚀 <b>ACCUMULAZIONE POTENZIALE BYBIT</b> 🚀\n\n` +
                         `<b>${symbol}</b>\n` +
                         `Prezzo attuale: <b>$${price.toFixed(4)}</b>\n` +
                         `Hammer bullish 1H ✅\n` +
-                        `Bid ratio (notional): <b>${(bidRatio * 100).toFixed(2)}%</b> ✅\n` +
-                        `Funding rate: <b>${(funding * 100).toFixed(5)}%</b> ${fundingEmoji}\n\n` +
+                        `Bid ratio (notional): <b>${(bidRatio * 100).toFixed(2)}%</b> ✅\n\n` +
                         `<a href='https://www.tradingview.com/chart/?symbol=BYBIT:${symbol}'>TradingView Chart</a> | ` +
                         `<a href='https://www.bybit.com/trade/usdt/${symbol}'>Trade su Bybit</a>`;
 
