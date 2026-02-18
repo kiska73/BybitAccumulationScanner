@@ -1,7 +1,7 @@
 const fetch = require('node-fetch');
 const cron = require('node-cron');
 
-// HARDCODED - bot tuo (consiglio di passare a env var in produzione)
+// HARDCODED - bot tuo (consiglio env var in produzione)
 const TELEGRAM_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
 const TELEGRAM_CHAT_ID = '820279313';
 
@@ -30,6 +30,27 @@ function isHammer(kline) {
          lowerShadow >= 2 * body &&
          upperShadow <= 0.5 * body &&
          close > open;
+}
+
+// Funzione per calcolare EMA (periodo 223)
+function calculateEMA(closes, period) {
+  if (closes.length < period) return null;
+
+  // Initial SMA per i primi 'period' valori
+  let sum = 0;
+  for (let i = 0; i < period; i++) {
+    sum += closes[i];
+  }
+  let ema = sum / period;
+
+  const multiplier = 2 / (period + 1);
+
+  // Poi EMA iterativa
+  for (let i = period; i < closes.length; i++) {
+    ema = (closes[i] - ema) * multiplier + ema;
+  }
+
+  return ema;
 }
 
 async function getBidRatioNotional(symbol) {
@@ -94,26 +115,37 @@ async function scan() {
 
     for (const symbol of topSymbols) {
       try {
-        // Piccolo delay per non stressare troppo l'API
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        // Richiediamo 3 candele per sicurezza
-        const klineData = await get(`/v5/market/kline?category=linear&symbol=${symbol}&interval=60&limit=3`);
+        // Richiediamo 300 candele per avere abbastanza dati per EMA223
+        const klineData = await get(`/v5/market/kline?category=linear&symbol=${symbol}&interval=60&limit=300`);
         const klines = klineData.result.list;
-        if (klines.length < 2) continue;
+        if (klines.length < 250) continue; // sicurezza per EMA
 
-        // klines[1] = ultima candela chiusa (al minuto 01 è sempre questa)
+        // klines[0] = candela corrente (incompleta)
+        // klines[1] = ultima candela chiusa
         const lastClosed = klines[1];
 
-        // Controllo timestamp: assicuriamoci che sia realmente chiusa
+        // Controllo timestamp per assicurare che sia chiusa
         const candleStart = parseInt(lastClosed[0]);
-        const candleEnd = candleStart + 3600000; // 1 ora in ms
+        const candleEnd = candleStart + 3600000;
         if (candleEnd > now) {
           console.log(`Candela non ancora chiusa per ${symbol}`);
           continue;
         }
 
         if (!isHammer(lastClosed)) continue;
+
+        // Calcolo EMA223 solo sulle candele chiuse
+        // Estraiamo i close delle candele chiuse (escludiamo klines[0])
+        let rawCloses = klines.slice(1).map(k => parseFloat(k[4])); // newest closed → oldest
+        let closes = rawCloses.reverse(); // ora old → new (cronologico)
+
+        const ema223 = calculateEMA(closes, 223);
+        if (ema223 === null) continue;
+
+        const closePrice = parseFloat(lastClosed[4]);
+        if (closePrice <= ema223) continue; // deve essere SOPRA EMA223
 
         const bidRatio = await getBidRatioNotional(symbol);
         if (bidRatio < 0.65) continue;
@@ -127,12 +159,13 @@ async function scan() {
                         `<b>${symbol}</b>\n` +
                         `Prezzo attuale: <b>$${price.toFixed(4)}</b>\n` +
                         `Hammer bullish 1H ✅\n` +
+                        `Prezzo > EMA223 1H ✅\n` +
                         `Bid ratio (notional): <b>${(bidRatio * 100).toFixed(2)}%</b> ✅\n\n` +
                         `<a href='https://www.tradingview.com/chart/?symbol=BYBIT:${symbol}'>TradingView Chart</a> | ` +
                         `<a href='https://www.bybit.com/trade/usdt/${symbol}'>Trade su Bybit</a>`;
 
         await sendTelegram(message);
-        console.log(`🚀 ALERT INVIATO: ${symbol} - Bid ${(bidRatio * 100).toFixed(2)}%`);
+        console.log(`🚀 ALERT INVIATO: ${symbol} - Bid ${(bidRatio * 100).toFixed(2)}% - Sopra EMA223`);
         alertCount++;
 
       } catch (e) {
@@ -149,10 +182,10 @@ async function scan() {
   }
 }
 
-// Scheduler: esegue esattamente 1 minuto dopo la chiusura della candela 1H
+// Scheduler: 1 minuto dopo chiusura candela 1H
 cron.schedule('1 * * * *', () => {
   scan();
 });
 
 console.log('Scanner Bybit avviato - primo scan al prossimo :01');
-scan(); // scan immediato all'avvio per testing
+scan(); // scan immediato per testing
