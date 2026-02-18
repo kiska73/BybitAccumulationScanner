@@ -170,7 +170,7 @@ async function scan() {
 
     // Messaggio di fine scan
     if (alertCount === 0) {
-      await sendTelegram('✅ <b>Scan Bybit completato</b>: nessun setup accumulazione trovato questa ora.');
+      await sendTelegram('✅ <b>Scan Bybit completato</b>: Nessun setup trovato.');
       console.log('Nessun setup trovato - messaggio inviato');
     } else {
       await sendTelegram(`✅ <b>Scan Bybit completato</b>: trovati <b>${alertCount}</b> setup!`);
