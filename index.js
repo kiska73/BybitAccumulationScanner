@@ -2,8 +2,8 @@ const fetch = require('node-fetch');
 const cron = require('node-cron');
 
 // HARDCODED - bot tuo
-const TELEGRAM_TOKEN = '8565429677:AAENzErYwq5PXmfDJe616GMYwARPnxCBYgk';
-const TELEGRAM_CHAT_ID = '8565429677';
+const TELEGRAM_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
+const TELEGRAM_CHAT_ID = '820279313';
 
 const BASE_URL = 'https://api.bybit.com';
 
