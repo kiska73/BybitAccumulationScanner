@@ -36,7 +36,6 @@ function isHammer(kline) {
 function calculateEMA(closes, period) {
   if (closes.length < period) return null;
 
-  // Initial SMA per i primi 'period' valori
   let sum = 0;
   for (let i = 0; i < period; i++) {
     sum += closes[i];
@@ -45,7 +44,6 @@ function calculateEMA(closes, period) {
 
   const multiplier = 2 / (period + 1);
 
-  // Poi EMA iterativa
   for (let i = period; i < closes.length; i++) {
     ema = (closes[i] - ema) * multiplier + ema;
   }
@@ -96,6 +94,9 @@ async function scan() {
   let alertCount = 0;
   const now = Date.now();
 
+  // Messaggio di inizio scan (heartbeat per sapere che è partito)
+  await sendTelegram('🔍 <b>Scan Bybit avviato</b> (1 minuto dopo chiusura candela 1H)');
+
   try {
     const tickersData = await get('/v5/market/tickers?category=linear');
     const list = tickersData.result.list;
@@ -117,16 +118,12 @@ async function scan() {
       try {
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        // Richiediamo 300 candele per avere abbastanza dati per EMA223
         const klineData = await get(`/v5/market/kline?category=linear&symbol=${symbol}&interval=60&limit=300`);
         const klines = klineData.result.list;
-        if (klines.length < 250) continue; // sicurezza per EMA
+        if (klines.length < 250) continue;
 
-        // klines[0] = candela corrente (incompleta)
-        // klines[1] = ultima candela chiusa
         const lastClosed = klines[1];
 
-        // Controllo timestamp per assicurare che sia chiusa
         const candleStart = parseInt(lastClosed[0]);
         const candleEnd = candleStart + 3600000;
         if (candleEnd > now) {
@@ -136,16 +133,14 @@ async function scan() {
 
         if (!isHammer(lastClosed)) continue;
 
-        // Calcolo EMA223 solo sulle candele chiuse
-        // Estraiamo i close delle candele chiuse (escludiamo klines[0])
-        let rawCloses = klines.slice(1).map(k => parseFloat(k[4])); // newest closed → oldest
-        let closes = rawCloses.reverse(); // ora old → new (cronologico)
+        let rawCloses = klines.slice(1).map(k => parseFloat(k[4]));
+        let closes = rawCloses.reverse();
 
         const ema223 = calculateEMA(closes, 223);
         if (ema223 === null) continue;
 
         const closePrice = parseFloat(lastClosed[4]);
-        if (closePrice <= ema223) continue; // deve essere SOPRA EMA223
+        if (closePrice <= ema223) continue;
 
         const bidRatio = await getBidRatioNotional(symbol);
         if (bidRatio < 0.65) continue;
@@ -173,12 +168,18 @@ async function scan() {
       }
     }
 
+    // Messaggio di fine scan
     if (alertCount === 0) {
-      console.log('Nessun setup trovato');
+      await sendTelegram('✅ <b>Scan Bybit completato</b>: nessun setup accumulazione trovato questa ora.');
+      console.log('Nessun setup trovato - messaggio inviato');
+    } else {
+      await sendTelegram(`✅ <b>Scan Bybit completato</b>: trovati <b>${alertCount}</b> setup!`);
+      console.log(`Scan completato con ${alertCount} alert`);
     }
-    console.log('Scan completato');
+
   } catch (e) {
     console.error('Errore scan generale:', e.message);
+    await sendTelegram(`❌ <b>Errore durante lo scan Bybit</b>: ${e.message}`);
   }
 }
 
@@ -188,4 +189,9 @@ cron.schedule('1 * * * *', () => {
 });
 
 console.log('Scanner Bybit avviato - primo scan al prossimo :01');
-scan(); // scan immediato per testing
+
+// Messaggio di avvio bot
+sendTelegram('🤖 <b>Scanner Bybit ACCESO</b> e in esecuzione.\nProssimo scan al minuto 01 di ogni ora.');
+
+// Scan immediato per testing
+scan();
