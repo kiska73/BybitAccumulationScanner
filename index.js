@@ -84,9 +84,9 @@ function updateCooldown(symbol) {
 }
 
 // ====================== LEVEL & SCORE ======================
-function getLevel(score) {
-  if (score >= 85) return { emoji: '🔥🔥🔥', text: 'SUPER SQUEEZE' };
-  if (score >= 70) return { emoji: '📈📈', text: 'FORTE' };
+function getLevel(score, isLong) {
+  if (score >= 85) return { emoji: isLong ? '🔥🔥🔥' : '📉📉📉', text: isLong ? 'SUPER SHORT SQUEEZE' : 'SUPER LONG SQUEEZE' };
+  if (score >= 70) return { emoji: isLong ? '📈📈' : '📉📉', text: isLong ? 'FORTE SHORT SQUEEZE' : 'FORTE LONG SQUEEZE' };
   return null; // sotto 70 → scartato
 }
 
@@ -124,15 +124,24 @@ async function scanBybitPerp() {
       if (oiPct < CONFIG.OI_MIN) continue;
 
       const cvd = await getCvdBybit(symbol, true);
-      if (cvd < CONFIG.CVD_MIN_PERP) continue;
-
       const bookImb = await getBookImbBybit(symbol, true);
-      if (bookImb < CONFIG.BOOK_MIN_IMB) continue;
 
-      const score = calculateScore(oiPct, bookImb, pricePct, true);
+      let isLong = false;
+      let effectiveBook = bookImb;
+
+      if (cvd >= CONFIG.CVD_MIN_PERP && bookImb >= CONFIG.BOOK_MIN_IMB) {
+        isLong = true;
+      } else if (cvd <= -CONFIG.CVD_MIN_PERP && bookImb <= -CONFIG.BOOK_MIN_IMB) {
+        isLong = false;
+        effectiveBook = -bookImb;
+      } else {
+        continue;
+      }
+
+      const score = calculateScore(oiPct, effectiveBook, pricePct, true);
       if (score < CONFIG.MIN_SCORE) continue;
 
-      const level = getLevel(score);
+      const level = getLevel(score, isLong);
       if (!level) continue;
 
       const extra = `   OI 1h: +${oiPct.toFixed(2)}% | CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
@@ -140,7 +149,7 @@ async function scanBybitPerp() {
 
       const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/usdt/');
 
-      candidates.push({ score, details });
+      candidates.push({ score, details, isLong });
       updateCooldown(symbol);
     }
   } catch (e) {
@@ -148,7 +157,11 @@ async function scanBybitPerp() {
   }
 
   candidates.sort((a, b) => b.score - a.score);
-  return candidates.slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
+
+  const longCandidates = candidates.filter(c => c.isLong).slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
+  const shortCandidates = candidates.filter(c => !c.isLong).slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
+
+  return { long: longCandidates, short: shortCandidates };
 }
 
 // ====================== BYBIT SPOT ======================
@@ -327,13 +340,16 @@ async function mainScan() {
   console.log(`[${new Date().toLocaleTimeString('it-IT')}] Full scan avviato...`);
   cleanupOldSignals();
 
-  const perpSignals = await scanBybitPerp();
+  const perp = await scanBybitPerp();
   const bybitSpotSignals = await scanBybitSpot();
   const binanceSignals = await scanBinanceSpot();
 
   const sections = [];
-  if (perpSignals.length > 0) {
-    sections.push(`<b>BYBIT PERPETUAL SQUEEZE</b>\n\n${perpSignals.join('\n\n')}`);
+  if (perp.long.length > 0) {
+    sections.push(`<b>BYBIT PERPETUAL SHORT SQUEEZE</b>\n\n${perp.long.join('\n\n')}`);
+  }
+  if (perp.short.length > 0) {
+    sections.push(`<b>BYBIT PERPETUAL LONG SQUEEZE</b>\n\n${perp.short.join('\n\n')}`);
   }
   if (bybitSpotSignals.length > 0) {
     sections.push(`<b>BYBIT SPOT SQUEEZE</b>\n\n${bybitSpotSignals.join('\n\n')}`);
