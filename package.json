@@ -1,16 +1,11 @@
 {
-  "name": "bybit-accumulation-scanner",
-  "version": "1.0.0",
-  "description": "Scanner accumulazione Bybit perpetual",
-  "main": "index.js",
+  "name": "full-squeeze-scanner",
+  "version": "3.0.0",
+  "main": "full-scanner.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node full-scanner.js"
   },
   "dependencies": {
-    "node-cron": "^3.0.3",
-    "node-fetch": "^2.7.0"
-  },
-  "engines": {
-    "node": ">=18"
+    "axios": "^1.7.2"
   }
 }
