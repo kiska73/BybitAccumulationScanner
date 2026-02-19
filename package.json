@@ -1,9 +1,9 @@
 {
   "name": "full-squeeze-scanner",
   "version": "3.0.0",
-  "main": "full-scanner.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node full-scanner.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "axios": "^1.7.2"
