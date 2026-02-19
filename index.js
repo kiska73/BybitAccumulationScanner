@@ -37,15 +37,16 @@ function cleanupOldSignals() {
 }
 
 const CONFIG = {
-  PRICE_MAX_PCT_PERP: 1.8,
+  PRICE_MAX_PCT_PERP: 5.0,
   PRICE_MAX_PCT_SPOT: 2.0,
   TURNOVER_MIN: 250000,
-  OI_MIN: 2.0,
-  CVD_MIN_PERP: 0.04,
+  OI_MIN: 1.0,
+  CVD_MIN_PERP: 0.03,
   CVD_MIN_SPOT: 0.08,
-  BOOK_MIN_IMB: 0.05,
-  MAX_SIGNALS_PER_TYPE: 10,
-  SCAN_INTERVAL_MIN: 30
+  BOOK_MIN_IMB: 0.03,
+  MAX_SIGNALS_PER_TYPE: 8,
+  SCAN_INTERVAL_MIN: 30,
+  MIN_SCORE: 70  // nuovo: soglia minima
 };
 
 // ====================== TELEGRAM ======================
@@ -54,7 +55,7 @@ async function sendTelegram(content, title) {
     console.log('⚠️ Token Telegram non configurato');
     return;
   }
-  const header = `<b>🚀 ${title} - ${new Date().toLocaleString('it-IT')}</b>\n\n`;
+  const header = `<b>🚀 ${title}</b>\n\n`;
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
@@ -62,7 +63,7 @@ async function sendTelegram(content, title) {
       parse_mode: 'HTML',
       disable_web_page_preview: false
     });
-    console.log(`✅ Inviato segnale Telegram: ${title}`);
+    console.log(`✅ Inviato messaggio unico Telegram: ${title}`);
   } catch (e) {
     console.log('Errore Telegram:', e.message);
   }
@@ -79,10 +80,9 @@ function updateCooldown(symbol) {
 
 // ====================== LEVEL & SCORE ======================
 function getLevel(score) {
-  if (score >= 85) return { emoji: '🔥🔥🔥', text: 'SUPER SQUEEZE (90%+)' };
-  if (score >= 70) return { emoji: '📈📈', text: 'FORTE (70-89%)' };
-  if (score >= 50) return { emoji: '📈', text: 'BUONO (50-69%)' };
-  return { emoji: '👀', text: 'DA TENERE D’OCCHIO' };
+  if (score >= 85) return { emoji: '🔥🔥🔥', text: 'SUPER SQUEEZE' };
+  if (score >= 70) return { emoji: '📈📈', text: 'FORTE' };
+  return null; // sotto 70 → scartato
 }
 
 function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
@@ -92,20 +92,25 @@ function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
   return Math.min(100, Math.max(0, base + bookImb * 95 + priceBonus - pricePenalty));
 }
 
+// ====================== SCAN COMMON ======================
+function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '') {
+  return `${level.emoji} <b><a href="${linkBase}${symbol}${linkSuffix}">${symbol}</a></b> — ${level.text}\n` +
+         `   Score: <b>${score.toFixed(0)}/100</b>\n` +
+         extraLines;
+}
+
 // ====================== BYBIT PERPETUAL ======================
 async function scanBybitPerp() {
-  const signals = [];
+  const candidates = [];
   try {
     const tickers = (await axios.get('https://api.bybit.com/v5/market/tickers?category=linear', { timeout: 10000 })).data.result.list || [];
     for (const t of tickers) {
       const symbol = t.symbol;
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
 
-      const pricePct = parseFloat(t.price24hPcnt || 0); // es. -0.015 = -1.5%
-      const funding = parseFloat(t.fundingRate || 0);
+      const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
-
-      if (Math.abs(pricePct) * 100 >= CONFIG.PRICE_MAX_PCT_PERP || funding > 0 || turnover < CONFIG.TURNOVER_MIN) continue;
+      if (Math.abs(pricePct) * 100 >= CONFIG.PRICE_MAX_PCT_PERP || turnover < CONFIG.TURNOVER_MIN) continue;
 
       const oiPct = await getOiChange(symbol);
       if (oiPct < CONFIG.OI_MIN) continue;
@@ -117,26 +122,30 @@ async function scanBybitPerp() {
       if (bookImb < CONFIG.BOOK_MIN_IMB) continue;
 
       const score = calculateScore(oiPct, bookImb, pricePct, true);
+      if (score < CONFIG.MIN_SCORE) continue; // nuovo filtro
+
       const level = getLevel(score);
+      if (!level) continue;
 
-      const details = `${level.emoji} <b><a href="https://www.bybit.com/trade/usdt/${symbol}">${symbol}</a></b> — ${level.text}\n` +
-                      `   Score: <b>${score.toFixed(0)}/100</b>\n` +
-                      `   OI 1h: +${oiPct.toFixed(2)}% | CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                      `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+      const extra = `   OI 1h: +${oiPct.toFixed(2)}% | CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
+                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-      signals.push(details);
+      const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/usdt/');
+
+      candidates.push({ score, details });
       updateCooldown(symbol);
-      if (signals.length >= CONFIG.MAX_SIGNALS_PER_TYPE) break;
     }
   } catch (e) {
     console.log('Errore Bybit Perp:', e.message);
   }
-  return signals;
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
 }
 
 // ====================== BYBIT SPOT ======================
 async function scanBybitSpot() {
-  const signals = [];
+  const candidates = [];
   try {
     const tickers = (await axios.get('https://api.bybit.com/v5/market/tickers?category=spot', { timeout: 10000 })).data.result.list || [];
     for (const t of tickers) {
@@ -145,7 +154,6 @@ async function scanBybitSpot() {
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
-
       if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) continue;
 
       const cvd = await getCvdBybit(symbol, false);
@@ -155,26 +163,30 @@ async function scanBybitSpot() {
       if (bookImb < CONFIG.BOOK_MIN_IMB) continue;
 
       const score = calculateScore(cvd, bookImb, pricePct, false);
+      if (score < CONFIG.MIN_SCORE) continue;
+
       const level = getLevel(score);
+      if (!level) continue;
 
-      const details = `${level.emoji} <b><a href="https://www.bybit.com/trade/spot/${symbol}">${symbol}</a></b> — ${level.text}\n` +
-                      `   Score: <b>${score.toFixed(0)}/100</b>\n` +
-                      `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                      `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+      const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
+                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-      signals.push(details);
+      const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/spot/');
+
+      candidates.push({ score, details });
       updateCooldown(symbol);
-      if (signals.length >= CONFIG.MAX_SIGNALS_PER_TYPE) break;
     }
   } catch (e) {
     console.log('Errore Bybit Spot:', e.message);
   }
-  return signals;
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
 }
 
 // ====================== BINANCE SPOT ======================
 async function scanBinanceSpot() {
-  const signals = [];
+  const candidates = [];
   try {
     const tickers = (await axios.get('https://api.binance.com/api/v3/ticker/24hr', { timeout: 10000 })).data
       .filter(t => t.symbol.endsWith('USDT'));
@@ -184,7 +196,6 @@ async function scanBinanceSpot() {
 
       const pricePct = parseFloat(t.priceChangePercent) / 100;
       const turnover = parseFloat(t.quoteVolume);
-
       if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) continue;
 
       const cvd = await getCvdBinance(symbol);
@@ -194,22 +205,26 @@ async function scanBinanceSpot() {
       if (bookImb < CONFIG.BOOK_MIN_IMB) continue;
 
       const score = calculateScore(cvd, bookImb, pricePct, false);
+      if (score < CONFIG.MIN_SCORE) continue;
+
       const level = getLevel(score);
+      if (!level) continue;
 
       const base = symbol.slice(0, -4);
-      const details = `${level.emoji} <b><a href="https://www.binance.com/en/trade/${base}_USDT">${symbol}</a></b> — ${level.text}\n` +
-                      `   Score: <b>${score.toFixed(0)}/100</b>\n` +
-                      `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                      `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+      const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
+                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-      signals.push(details);
+      const details = buildDetails(symbol, level, score, extra, 'https://www.binance.com/en/trade/', `${base}_USDT`);
+
+      candidates.push({ score, details });
       updateCooldown(symbol);
-      if (signals.length >= CONFIG.MAX_SIGNALS_PER_TYPE) break;
     }
   } catch (e) {
     console.log('Errore Binance Spot:', e.message);
   }
-  return signals;
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
 }
 
 // ====================== HELPER API ======================
@@ -300,22 +315,31 @@ async function mainScan() {
   cleanupOldSignals();
 
   const perpSignals = await scanBybitPerp();
-  if (perpSignals.length) await sendTelegram(perpSignals.join('\n\n'), 'BYBIT PERPETUAL SQUEEZE');
-
   const bybitSpotSignals = await scanBybitSpot();
-  if (bybitSpotSignals.length) await sendTelegram(bybitSpotSignals.join('\n\n'), 'BYBIT SPOT SQUEEZE');
-
   const binanceSignals = await scanBinanceSpot();
-  if (binanceSignals.length) await sendTelegram(binanceSignals.join('\n\n'), 'BINANCE SPOT SQUEEZE');
 
-  if (!perpSignals.length && !bybitSpotSignals.length && !binanceSignals.length) {
+  const sections = [];
+  if (perpSignals.length > 0) {
+    sections.push(`<b>BYBIT PERPETUAL SQUEEZE</b>\n\n${perpSignals.join('\n\n')}`);
+  }
+  if (bybitSpotSignals.length > 0) {
+    sections.push(`<b>BYBIT SPOT SQUEEZE</b>\n\n${bybitSpotSignals.join('\n\n')}`);
+  }
+  if (binanceSignals.length > 0) {
+    sections.push(`<b>BINANCE SPOT SQUEEZE</b>\n\n${binanceSignals.join('\n\n')}`);
+  }
+
+  if (sections.length > 0) {
+    const fullContent = sections.join('\n\n==============================\n\n');
+    await sendTelegram(fullContent, `FULL SQUEEZE SCAN - ${new Date().toLocaleString('it-IT')}`);
+  } else {
     console.log('Nessun segnale valido in questo scan');
   }
 }
 
 // ====================== AVVIO ======================
-console.log(`🚀 FULL SCANNER v3.0 (Perp + Spot Bybit + Binance) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
-mainScan(); // primo scan immediato
+console.log(`🚀 FULL SCANNER v3.2 avviato - solo segnali FORTI (≥70/100) - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
+mainScan();
 
 setInterval(() => {
   mainScan().catch(err => console.log('Errore generale scan:', err.message));
