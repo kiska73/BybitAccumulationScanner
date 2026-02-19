@@ -46,8 +46,13 @@ const CONFIG = {
   BOOK_MIN_IMB: 0.03,
   MAX_SIGNALS_PER_TYPE: 8,
   SCAN_INTERVAL_MIN: 30,
-  MIN_SCORE: 70  // nuovo: soglia minima
+  MIN_SCORE: 70
 };
+
+const STABLE_BASES = [
+  'USDC', 'TUSD', 'FDUSD', 'BUSD', 'DAI', 'PYUSD', 'USDP', 'GUSD',
+  'FRAX', 'USDD', 'USDB', 'USDS', 'USDE', 'RLUSD', 'USDG', 'YUSD', 'USD1'
+]; // Esclude pair stable-USDT
 
 // ====================== TELEGRAM ======================
 async function sendTelegram(content, title) {
@@ -108,6 +113,9 @@ async function scanBybitPerp() {
       const symbol = t.symbol;
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
 
+      const base = symbol.slice(0, -4);
+      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
       if (Math.abs(pricePct) * 100 >= CONFIG.PRICE_MAX_PCT_PERP || turnover < CONFIG.TURNOVER_MIN) continue;
@@ -122,7 +130,7 @@ async function scanBybitPerp() {
       if (bookImb < CONFIG.BOOK_MIN_IMB) continue;
 
       const score = calculateScore(oiPct, bookImb, pricePct, true);
-      if (score < CONFIG.MIN_SCORE) continue; // nuovo filtro
+      if (score < CONFIG.MIN_SCORE) continue;
 
       const level = getLevel(score);
       if (!level) continue;
@@ -151,6 +159,9 @@ async function scanBybitSpot() {
     for (const t of tickers) {
       const symbol = t.symbol;
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
+
+      const base = symbol.slice(0, -4);
+      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
@@ -194,6 +205,9 @@ async function scanBinanceSpot() {
       const symbol = t.symbol;
       if (!checkCooldown(symbol)) continue;
 
+      const base = symbol.slice(0, -4);
+      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+
       const pricePct = parseFloat(t.priceChangePercent) / 100;
       const turnover = parseFloat(t.quoteVolume);
       if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) continue;
@@ -210,7 +224,6 @@ async function scanBinanceSpot() {
       const level = getLevel(score);
       if (!level) continue;
 
-      const base = symbol.slice(0, -4);
       const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
                     `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
@@ -338,7 +351,7 @@ async function mainScan() {
 }
 
 // ====================== AVVIO ======================
-console.log(`🚀 FULL SCANNER v3.2 avviato - solo segnali FORTI (≥70/100) - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
+console.log(`🚀 FULL SCANNER v3.3 avviato - solo segnali FORTI (≥70/100) - esclusi stable-USDT - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
 mainScan();
 
 setInterval(() => {
