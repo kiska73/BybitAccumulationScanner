@@ -52,7 +52,7 @@ const CONFIG = {
 const STABLE_BASES = [
   'USDC', 'TUSD', 'FDUSD', 'BUSD', 'DAI', 'PYUSD', 'USDP', 'GUSD',
   'FRAX', 'USDD', 'USDB', 'USDS', 'USDE', 'RLUSD', 'USDG', 'YUSD', 'USD1'
-]; // Esclude pair stable-USDT
+];
 
 // ====================== TELEGRAM ======================
 async function sendTelegram(content, title) {
@@ -87,7 +87,7 @@ function updateCooldown(symbol) {
 function getLevel(score, isLong) {
   if (score >= 85) return { emoji: isLong ? '🔥🔥🔥' : '📉📉📉', text: isLong ? 'SUPER SHORT SQUEEZE' : 'SUPER LONG SQUEEZE' };
   if (score >= 70) return { emoji: isLong ? '📈📈' : '📉📉', text: isLong ? 'FORTE SHORT SQUEEZE' : 'FORTE LONG SQUEEZE' };
-  return null; // sotto 70 → scartato
+  return null;
 }
 
 function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
@@ -97,11 +97,51 @@ function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
   return Math.min(100, Math.max(0, base + bookImb * 95 + priceBonus - pricePenalty));
 }
 
-// ====================== SCAN COMMON ======================
-function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '') {
-  return `${level.emoji} <b><a href="${linkBase}${symbol}${linkSuffix}">${symbol}</a></b> — ${level.text}\n` +
-         `   Score: <b>${score.toFixed(0)}/100</b>\n` +
-         extraLines;
+// ====================== POTENZIALE ESPLOSIONE INTRADAY REALISTICO ======================
+function getExplosionPotential(score, cvdAbs, bookAbs, pricePct24h, spacePct, isLong, isPerp) {
+  const strength = (score / 70) * (1 + cvdAbs * 3) * (1 + bookAbs * 5);
+  
+  let multiplier;
+  if (isPerp) {
+    multiplier = isLong ? 4.0 : 3.5; // short squeeze perp più esplosivo
+  } else {
+    multiplier = 2.8; // spot meno volatile/leveraged
+  }
+  
+  let estimated = strength * multiplier;
+  const maxCap = isPerp ? 20 : 15;
+  estimated = Math.min(maxCap, Math.max(5, Math.round(estimated)));
+
+  const levelText = estimated >= (isPerp ? 16 : 12) ? 'NUCLEARE 🔥🔥🔥' :
+                    estimated >= (isPerp ? 12 : 9)  ? 'Very Strong 🔥🔥' :
+                    estimated >= (isPerp ? 8 : 6)   ? 'Strong 🔥' : 'Moderate';
+
+  const estimatedLow = Math.round(estimated * 0.75);
+  const toExtreme = Math.max(1.5, spacePct).toFixed(1);
+
+  return {
+    toExtreme,
+    estimatedLow,
+    estimatedHigh: estimated,
+    level: levelText
+  };
+}
+
+// ====================== BUILD DETAILS ======================
+function buildDetails(symbol, level, score, extraLines, potential, linkBase, linkSuffix = '') {
+  let details = `${level.emoji} <b><a href="${linkBase}${symbol}${linkSuffix}">${symbol}</a></b> — ${level.text}\n` +
+                `   Score: <b>${score.toFixed(0)}/100</b>\n` +
+                extraLines;
+
+  if (potential) {
+    const direction = level.text.includes('SHORT SQUEEZE') ? '↑ UP' : '↓ DOWN';
+    const extremeText = level.text.includes('SHORT SQUEEZE') ? 'high 24h' : 'low 24h';
+    const sign = level.text.includes('SHORT SQUEEZE') ? '+' : '-';
+    details += `\n   Potenziale ${direction}: ${potential.level} (est. ${potential.estimatedLow}-${potential.estimatedHigh}% intraday)\n` +
+               `   Spazio verso ${extremeText}: ${sign}${potential.toExtreme}%`;
+  }
+
+  return details;
 }
 
 // ====================== BYBIT PERPETUAL ======================
@@ -114,7 +154,7 @@ async function scanBybitPerp() {
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
 
       const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
@@ -128,12 +168,14 @@ async function scanBybitPerp() {
 
       let isLong = false;
       let effectiveBook = bookImb;
+      let effectiveCvd = cvd;
 
       if (cvd >= CONFIG.CVD_MIN_PERP && bookImb >= CONFIG.BOOK_MIN_IMB) {
         isLong = true;
       } else if (cvd <= -CONFIG.CVD_MIN_PERP && bookImb <= -CONFIG.BOOK_MIN_IMB) {
         isLong = false;
         effectiveBook = -bookImb;
+        effectiveCvd = -cvd;
       } else {
         continue;
       }
@@ -144,10 +186,23 @@ async function scanBybitPerp() {
       const level = getLevel(score, isLong);
       if (!level) continue;
 
+      // Spazio reale per potenziale
+      const currentPrice = parseFloat(t.lastPrice || 0);
+      const high24 = parseFloat(t.highPrice24h || 0);
+      const low24 = parseFloat(t.lowPrice24h || 0);
+      if (currentPrice === 0) continue;
+
+      let spacePct = isLong 
+        ? (high24 - currentPrice) / currentPrice * 100 
+        : (currentPrice - low24) / currentPrice * 100;
+      spacePct = Math.max(1.5, spacePct);
+
+      const potential = getExplosionPotential(score, Math.abs(effectiveCvd), Math.abs(bookImb), pricePct, spacePct, isLong, true);
+
       const extra = `   OI 1h: +${oiPct.toFixed(2)}% | CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
                     `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-      const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/usdt/');
+      const details = buildDetails(symbol, level, score, extra, potential, 'https://www.bybit.com/trade/usdt/');
 
       candidates.push({ score, details, isLong });
       updateCooldown(symbol);
@@ -164,7 +219,7 @@ async function scanBybitPerp() {
   return { long: longCandidates, short: shortCandidates };
 }
 
-// ====================== BYBIT SPOT ======================
+// ====================== BYBIT SPOT (con potenziale) ======================
 async function scanBybitSpot() {
   const candidates = [];
   try {
@@ -174,7 +229,7 @@ async function scanBybitSpot() {
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
 
       const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
@@ -189,13 +244,21 @@ async function scanBybitSpot() {
       const score = calculateScore(cvd, bookImb, pricePct, false);
       if (score < CONFIG.MIN_SCORE) continue;
 
-      const level = getLevel(score);
+      const level = getLevel(score, true); // spot solo UP
       if (!level) continue;
+
+      // Spazio reale per potenziale (solo UP)
+      const currentPrice = parseFloat(t.lastPrice || 0);
+      const high24 = parseFloat(t.highPrice24h || 0);
+      if (currentPrice === 0) continue;
+
+      const spacePct = (high24 - currentPrice) / currentPrice * 100;
+      const potential = getExplosionPotential(score, cvd, bookImb, pricePct, spacePct, true, false);
 
       const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
                     `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-      const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/spot/');
+      const details = buildDetails(symbol, level, score, extra, potential, 'https://www.bybit.com/trade/spot/');
 
       candidates.push({ score, details });
       updateCooldown(symbol);
@@ -208,7 +271,7 @@ async function scanBybitSpot() {
   return candidates.slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
 }
 
-// ====================== BINANCE SPOT ======================
+// ====================== BINANCE SPOT (con potenziale) ======================
 async function scanBinanceSpot() {
   const candidates = [];
   try {
@@ -219,7 +282,7 @@ async function scanBinanceSpot() {
       if (!checkCooldown(symbol)) continue;
 
       const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.priceChangePercent) / 100;
       const turnover = parseFloat(t.quoteVolume);
@@ -234,13 +297,21 @@ async function scanBinanceSpot() {
       const score = calculateScore(cvd, bookImb, pricePct, false);
       if (score < CONFIG.MIN_SCORE) continue;
 
-      const level = getLevel(score);
+      const level = getLevel(score, true); // spot solo UP
       if (!level) continue;
+
+      // Spazio reale per potenziale (solo UP)
+      const currentPrice = parseFloat(t.lastPrice || 0);
+      const high24 = parseFloat(t.highPrice || 0);
+      if (currentPrice === 0) continue;
+
+      const spacePct = (high24 - currentPrice) / currentPrice * 100;
+      const potential = getExplosionPotential(score, cvd, bookImb, pricePct, spacePct, true, false);
 
       const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
                     `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-      const details = buildDetails(symbol, level, score, extra, 'https://www.binance.com/en/trade/', `${base}_USDT`);
+      const details = buildDetails(symbol, level, score, extra, potential, 'https://www.binance.com/en/trade/', `${base}_USDT`);
 
       candidates.push({ score, details });
       updateCooldown(symbol);
@@ -253,7 +324,7 @@ async function scanBinanceSpot() {
   return candidates.slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
 }
 
-// ====================== HELPER API ======================
+// ====================== HELPER API ====================== (invariati)
 async function getOiChange(symbol) {
   try {
     const res = await axios.get(`https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&interval=1h&limit=3`, { timeout: 8000 });
@@ -346,16 +417,16 @@ async function mainScan() {
 
   const sections = [];
   if (perp.long.length > 0) {
-    sections.push(`<b>BYBIT PERPETUAL SHORT SQUEEZE</b>\n\n${perp.long.join('\n\n')}`);
+    sections.push(`<b>BYBIT PERPETUAL SHORT SQUEEZE ↑</b>\n\n${perp.long.join('\n\n')}`);
   }
   if (perp.short.length > 0) {
-    sections.push(`<b>BYBIT PERPETUAL LONG SQUEEZE</b>\n\n${perp.short.join('\n\n')}`);
+    sections.push(`<b>BYBIT PERPETUAL LONG SQUEEZE ↓</b>\n\n${perp.short.join('\n\n')}`);
   }
   if (bybitSpotSignals.length > 0) {
-    sections.push(`<b>BYBIT SPOT SQUEEZE</b>\n\n${bybitSpotSignals.join('\n\n')}`);
+    sections.push(`<b>BYBIT SPOT PUMP ↑</b>\n\n${bybitSpotSignals.join('\n\n')}`);
   }
   if (binanceSignals.length > 0) {
-    sections.push(`<b>BINANCE SPOT SQUEEZE</b>\n\n${binanceSignals.join('\n\n')}`);
+    sections.push(`<b>BINANCE SPOT PUMP ↑</b>\n\n${binanceSignals.join('\n\n')}`);
   }
 
   if (sections.length > 0) {
@@ -367,7 +438,7 @@ async function mainScan() {
 }
 
 // ====================== AVVIO ======================
-console.log(`🚀 FULL SCANNER v3.3 avviato - solo segnali FORTI (≥70/100) - esclusi stable-USDT - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
+console.log(`🚀 FULL SCANNER v3.5 avviato - segnali FORTI + potenziale intraday realistico su PERP e SPOT - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
 mainScan();
 
 setInterval(() => {
