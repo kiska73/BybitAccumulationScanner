@@ -60,7 +60,7 @@ async function sendTelegram(content, title) {
     console.log('⚠️ Token Telegram non configurato');
     return;
   }
-  const header = `<b>📈-FULL SQUEEZE SCAN- 📉</b>\n\n`;
+  const header = `<b> ${title}</b>\n\n`;
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
@@ -83,28 +83,11 @@ function updateCooldown(symbol) {
   saveLastSignals();
 }
 
-// ====================== LEVEL & SCORE ======================
 function getLevel(score, isLong) {
-  let strength, emojiCount;
-  if (score >= 90) {
-    strength = 'NUCLEAR';
-    emojiCount = 3;
-  } else if (score >= 80) {
-    strength = 'SUPER';
-    emojiCount = 2;
-  } else if (score >= 70) {
-    strength = 'STRONG';
-    emojiCount = 1;
-  } else {
-    return null;
-  }
-
-  const emoji = isLong ? '🚀' : '📉';
-  const emojiStr = emoji.repeat(emojiCount);
-
-  const type = isLong ? 'SHORT SQUEEZE' : 'LONG SQUEEZE';
-
-  return { emoji: emojiStr, text: `${strength} ${type}` };
+  if (score >= 90) return { emoji: '🚀🚀🚀', text: isLong ? 'ULTRA SHORT SQUEEZE' : 'ULTRA LONG SQUEEZE' };
+  if (score >= 80) return { emoji: '🚀🚀', text: isLong ? 'SUPER SHORT SQUEEZE' : 'SUPER LONG SQUEEZE' };
+  if (score >= 70) return { emoji: '🚀', text: isLong ? 'FORTE SHORT SQUEEZE' : 'FORTE LONG SQUEEZE' };
+  return null; // sotto 70 → scartato
 }
 
 function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
@@ -115,8 +98,8 @@ function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
 }
 
 // ====================== SCAN COMMON ======================
-function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '') {
-  return `${level.emoji} <b><a href="${linkBase}${symbol}${linkSuffix}">${symbol}</a></b> — ${level.text}\n` +
+function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '', urlSymbol = symbol) {
+  return `${level.emoji} <b><a href="${linkBase}${urlSymbol}${linkSuffix}">${symbol}</a></b> — ${level.text}\n` +
          `   Score: <b>${score.toFixed(0)}/100</b>\n` +
          extraLines;
 }
@@ -162,7 +145,7 @@ async function scanBybitPerp() {
       if (!level) continue;
 
       const extra = `   OI 1h: +${oiPct.toFixed(2)}% | CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                    `   Price 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
       const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/usdt/');
 
@@ -210,7 +193,7 @@ async function scanBybitSpot() {
       if (!level) continue;
 
       const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                    `   Price 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
       const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/spot/');
 
@@ -255,9 +238,9 @@ async function scanBinanceSpot() {
       if (!level) continue;
 
       const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                    `   Price 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-      const details = buildDetails(symbol, level, score, extra, 'https://www.binance.com/en/trade/', `${base}_USDT`);
+      const details = buildDetails(symbol, level, score, extra, 'https://www.binance.com/en/trade/', '', `${base}_USDT`);
 
       candidates.push({ score, details });
       updateCooldown(symbol);
@@ -363,21 +346,21 @@ async function mainScan() {
 
   const sections = [];
   if (perp.long.length > 0) {
-    sections.push(`<b>BYBIT PERPETUAL SHORT SQUEEZE</b>\n\n${perp.long.join('\n\n')}`);
+    sections.push(`BYBIT PERP SHORT\n\n${perp.long.join('\n\n')}`);
   }
   if (perp.short.length > 0) {
-    sections.push(`<b>BYBIT PERPETUAL LONG SQUEEZE</b>\n\n${perp.short.join('\n\n')}`);
+    sections.push(`BYBIT PERP LONG\n\n${perp.short.join('\n\n')}`);
   }
   if (bybitSpotSignals.length > 0) {
-    sections.push(`<b>BYBIT SPOT SQUEEZE</b>\n\n${bybitSpotSignals.join('\n\n')}`);
+    sections.push(`BYBIT SPOT\n\n${bybitSpotSignals.join('\n\n')}`);
   }
   if (binanceSignals.length > 0) {
-    sections.push(`<b>BINANCE SPOT SQUEEZE</b>\n\n${binanceSignals.join('\n\n')}`);
+    sections.push(`BINANCE SPOT\n\n${binanceSignals.join('\n\n')}`);
   }
 
   if (sections.length > 0) {
     const fullContent = sections.join('\n\n==============================\n\n');
-    await sendTelegram(fullContent, `FULL SQUEEZE SCAN - ${new Date().toLocaleString('it-IT')}`);
+    await sendTelegram(fullContent, '📈-SQUEEZE SCAN- 📉');
   } else {
     console.log('Nessun segnale valido in questo scan');
   }
