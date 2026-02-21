@@ -52,7 +52,7 @@ const CONFIG = {
 const STABLE_BASES = [
   'USDC', 'TUSD', 'FDUSD', 'BUSD', 'DAI', 'PYUSD', 'USDP', 'GUSD',
   'FRAX', 'USDD', 'USDB', 'USDS', 'USDE', 'RLUSD', 'USDG', 'YUSD', 'USD1'
-]; // Esclude pair stable-USDT
+];
 
 // ====================== TELEGRAM ======================
 async function sendTelegram(content, title) {
@@ -86,7 +86,7 @@ function updateCooldown(symbol) {
 function getLevel(score, isLong) {
   if (score >= 90) return { emoji: '🚀🚀🚀', text: isLong ? 'ULTRA SHORT SQUEEZE' : 'ULTRA LONG SQUEEZE' };
   if (score >= 80) return { emoji: '🚀🚀', text: isLong ? 'SUPER SHORT SQUEEZE' : 'SUPER LONG SQUEEZE' };
-  if (score >= 70) return { emoji: '🚀', text: isLong ? 'FORTE SHORT SQUEEZE' : 'FORTE LONG SQUEEZE' };
+  if (score >= 70) return { emoji: '🚀', text: isLong ? 'BIG SHORT SQUEEZE' : 'BIG LONG SQUEEZE' };
   return null; // sotto 70 → scartato
 }
 
@@ -114,7 +114,7 @@ async function scanBybitPerp() {
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
 
       const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
@@ -130,9 +130,9 @@ async function scanBybitPerp() {
       let effectiveBook = bookImb;
 
       if (cvd >= CONFIG.CVD_MIN_PERP && bookImb >= CONFIG.BOOK_MIN_IMB) {
-        isLong = true;
+        isLong = true;          // rialzo atteso → short squeeze
       } else if (cvd <= -CONFIG.CVD_MIN_PERP && bookImb <= -CONFIG.BOOK_MIN_IMB) {
-        isLong = false;
+        isLong = false;         // ribasso atteso → long squeeze
         effectiveBook = -bookImb;
       } else {
         continue;
@@ -158,7 +158,7 @@ async function scanBybitPerp() {
 
   candidates.sort((a, b) => b.score - a.score);
 
-  const longCandidates = candidates.filter(c => c.isLong).slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
+  const longCandidates  = candidates.filter(c => c.isLong).slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
   const shortCandidates = candidates.filter(c => !c.isLong).slice(0, CONFIG.MAX_SIGNALS_PER_TYPE).map(c => c.details);
 
   return { long: longCandidates, short: shortCandidates };
@@ -174,7 +174,7 @@ async function scanBybitSpot() {
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
 
       const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
@@ -219,7 +219,7 @@ async function scanBinanceSpot() {
       if (!checkCooldown(symbol)) continue;
 
       const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue; // nuovo: escludi stable-USDT
+      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.priceChangePercent) / 100;
       const turnover = parseFloat(t.quoteVolume);
@@ -345,17 +345,21 @@ async function mainScan() {
   const binanceSignals = await scanBinanceSpot();
 
   const sections = [];
+
+  // ────────────────────────────────────────────────
+  // Qui avviene l'inversione semantica nei titoli
+  // ────────────────────────────────────────────────
   if (perp.long.length > 0) {
-    sections.push(`BYBIT PERP SHORT\n\n${perp.long.join('\n\n')}`);
+    sections.push(`BYBIT PERP — rialzo atteso (SHORT SQUEEZE)\n\n${perp.long.join('\n\n')}`);
   }
   if (perp.short.length > 0) {
-    sections.push(`BYBIT PERP LONG\n\n${perp.short.join('\n\n')}`);
+    sections.push(`BYBIT PERP — ribasso atteso (LONG SQUEEZE)\n\n${perp.short.join('\n\n')}`);
   }
   if (bybitSpotSignals.length > 0) {
-    sections.push(`BYBIT SPOT\n\n${bybitSpotSignals.join('\n\n')}`);
+    sections.push(`BYBIT SPOT — rialzo atteso\n\n${bybitSpotSignals.join('\n\n')}`);
   }
   if (binanceSignals.length > 0) {
-    sections.push(`BINANCE SPOT\n\n${binanceSignals.join('\n\n')}`);
+    sections.push(`BINANCE SPOT — rialzo atteso\n\n${binanceSignals.join('\n\n')}`);
   }
 
   if (sections.length > 0) {
