@@ -504,19 +504,19 @@ async function mainScan() {
   const sections = [];
 
   if (perp.long.length > 0) {
-    sections.push(`BYBIT PERP — rialzo atteso (SHORT SQUEEZE)\n\n${perp.long.join('\n\n')}`);
+    sections.push(`BYBIT PERP — Long Hit! (SHORT SQUEEZE)\n\n${perp.long.join('\n\n')}`);
   }
   if (perp.short.length > 0) {
-    sections.push(`BYBIT PERP — ribasso atteso (LONG SQUEEZE)\n\n${perp.short.join('\n\n')}`);
+    sections.push(`BYBIT PERP — Short Hit! (LONG SQUEEZE)\n\n${perp.short.join('\n\n')}`);
   }
   if (bybitSpot.length > 0) {
-    sections.push(`BYBIT SPOT — rialzo atteso\n\n${bybitSpot.join('\n\n')}`);
+    sections.push(`BYBIT SPOT — Long Hit!\n\n${bybitSpot.join('\n\n')}`);
   }
   if (binanceSpot.length > 0) {
-    sections.push(`BINANCE SPOT — rialzo atteso\n\n${binanceSpot.join('\n\n')}`);
+    sections.push(`BINANCE SPOT — Long Hit!\n\n${binanceSpot.join('\n\n')}`);
   }
 
-  const fullContent = controls + (sections.length > 0 ? sections.join('\n\n==============================\n\n') : '');
+  const fullContent = controls + (sections.length > 0 ? sections.join('\n\n=====================\n\n') : '');
 
   if (fullContent.trim()) {
     await sendTelegram(fullContent, '📈-SQUEEZE SCAN- 📉');
