@@ -60,7 +60,7 @@ async function sendTelegram(content, title) {
     console.log('⚠️ Token Telegram non configurato');
     return;
   }
-  const header = `<b>🚀 ${title}</b>\n\n`;
+  const header = `<b>📈-FULL SQUEEZE SCAN- 📉</b>\n\n`;
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
@@ -85,9 +85,26 @@ function updateCooldown(symbol) {
 
 // ====================== LEVEL & SCORE ======================
 function getLevel(score, isLong) {
-  if (score >= 85) return { emoji: isLong ? '🔥🔥🔥' : '📉📉📉', text: isLong ? 'SUPER SHORT SQUEEZE' : 'SUPER LONG SQUEEZE' };
-  if (score >= 70) return { emoji: isLong ? '📈📈' : '📉📉', text: isLong ? 'FORTE SHORT SQUEEZE' : 'FORTE LONG SQUEEZE' };
-  return null; // sotto 70 → scartato
+  let strength, emojiCount;
+  if (score >= 90) {
+    strength = 'NUCLEAR';
+    emojiCount = 3;
+  } else if (score >= 80) {
+    strength = 'SUPER';
+    emojiCount = 2;
+  } else if (score >= 70) {
+    strength = 'STRONG';
+    emojiCount = 1;
+  } else {
+    return null;
+  }
+
+  const emoji = isLong ? '🚀' : '📉';
+  const emojiStr = emoji.repeat(emojiCount);
+
+  const type = isLong ? 'SHORT SQUEEZE' : 'LONG SQUEEZE';
+
+  return { emoji: emojiStr, text: `${strength} ${type}` };
 }
 
 function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
@@ -145,7 +162,7 @@ async function scanBybitPerp() {
       if (!level) continue;
 
       const extra = `   OI 1h: +${oiPct.toFixed(2)}% | CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+                    `   Price 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
       const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/usdt/');
 
@@ -189,11 +206,11 @@ async function scanBybitSpot() {
       const score = calculateScore(cvd, bookImb, pricePct, false);
       if (score < CONFIG.MIN_SCORE) continue;
 
-      const level = getLevel(score);
+      const level = getLevel(score, true);
       if (!level) continue;
 
       const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+                    `   Price 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
       const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/spot/');
 
@@ -234,11 +251,11 @@ async function scanBinanceSpot() {
       const score = calculateScore(cvd, bookImb, pricePct, false);
       if (score < CONFIG.MIN_SCORE) continue;
 
-      const level = getLevel(score);
+      const level = getLevel(score, true);
       if (!level) continue;
 
       const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-                    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+                    `   Price 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
       const details = buildDetails(symbol, level, score, extra, 'https://www.binance.com/en/trade/', `${base}_USDT`);
 
