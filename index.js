@@ -163,7 +163,7 @@ async function getCurrentPriceChange(symbol, isBybit) {
 }
 
 // ────────────────────────────────────────────────
-//  HELPER CVD / BOOK
+//  HELPER CVD / BOOK - AGGIORNATO CON LIMIT=100
 // ────────────────────────────────────────────────
 async function getCvdBybit(symbol) {
   try {
@@ -181,10 +181,10 @@ async function getCvdBybit(symbol) {
 
 async function getBookImbBybit(symbol) {
   try {
-    const res = await axios.get(`https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${symbol}&limit=20`, { timeout: 8000 });
+    const res = await axios.get(`https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${symbol}&limit=100`, { timeout: 8000 });  // ← Cambiato a 100
     const d = res.data.result;
     let bids = 0, asks = 0;
-    const len = Math.min(20, d.b?.length || 0, d.a?.length || 0);
+    const len = Math.min(100, d.b?.length || 0, d.a?.length || 0);
     for (let i = 0; i < len; i++) {
       bids += parseFloat(d.b[i][1]);
       asks += parseFloat(d.a[i][1]);
@@ -210,10 +210,10 @@ async function getCvdBinance(symbol) {
 
 async function getBookImbBinance(symbol) {
   try {
-    const res = await axios.get(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=20`, { timeout: 8000 });
+    const res = await axios.get(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=100`, { timeout: 8000 });  // ← Cambiato a 100
     const d = res.data;
     let bids = 0, asks = 0;
-    const len = Math.min(20, d.bids.length, d.asks.length);
+    const len = Math.min(100, d.bids.length, d.asks.length);
     for (let i = 0; i < len; i++) {
       bids += parseFloat(d.bids[i][1]);
       asks += parseFloat(d.asks[i][1]);
@@ -352,7 +352,7 @@ async function mainScan() {
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 EXPLOSION POTENTIAL SCANNER v4.1 (senza stablecoin + 3 livelli) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 EXPLOSION POTENTIAL SCANNER v4.2 (book limit 100) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
