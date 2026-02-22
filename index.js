@@ -44,7 +44,7 @@ const CONFIG = {
   TURNOVER_MIN: 250000,
   CVD_MIN_SPOT: 0.08,
   BOOK_MIN_IMB: 0.025,
-  MAX_SIGNALS_PER_TYPE: 3,          // ← cambiato a 3 come richiesto ("sempre 3 distinte per qualità")
+  MAX_SIGNALS_PER_TYPE: 3,
   SCAN_INTERVAL_MIN: 30,
   MIN_SCORE: 70,
 };
@@ -91,47 +91,31 @@ function updateCooldown(symbol, type, score) {
 }
 
 // ────────────────────────────────────────────────
-//  LEVEL & SCORE
+//  LEVEL & SCORE - NOMENCLATURA CORRETTA
 // ────────────────────────────────────────────────
-function getLevel(score, isBullish) {   // isBullish = true → SHORT SQUEEZE (rialzo)
-  if (score >= 90) {
-    return {
-      emoji: '🚀🚀🚀',
-      text: isBullish ? 'ULTRA SHORT SQUEEZE' : 'ULTRA LONG SQUEEZE',
-    };
-  }
-  if (score >= 80) {
-    return {
-      emoji: '🚀🚀',
-      text: isBullish ? 'SUPER SHORT SQUEEZE' : 'SUPER LONG SQUEEZE',
-    };
-  }
-  if (score >= 70) {
-    return {
-      emoji: '🚀',
-      text: isBullish ? 'BIG SHORT SQUEEZE' : 'BIG LONG SQUEEZE',
-    };
-  }
+function getLevel(score, isLong) {   // isLong = true → LONG SQUEEZE (rialzo)
+  if (score >= 90) return { emoji: '🚀🚀🚀', text: isLong ? 'ULTRA LONG SQUEEZE' : 'ULTRA SHORT SQUEEZE' };
+  if (score >= 80) return { emoji: '🚀🚀', text: isLong ? 'SUPER LONG SQUEEZE' : 'SUPER SHORT SQUEEZE' };
+  if (score >= 70) return { emoji: '🚀', text: isLong ? 'BIG LONG SQUEEZE' : 'BIG SHORT SQUEEZE' };
   return null;
 }
 
 function calculateScore(cvdAbs, bookAbs, pricePct) {
   const base = cvdAbs * 2.35;
   const pricePenalty = Math.abs(pricePct) * 100;
-  const priceBonus = CONFIG.PRICE_MAX_PCT_SPOT;
-  return Math.min(100, Math.max(0, base + bookAbs * 95 + priceBonus - pricePenalty));
+  return Math.min(100, Math.max(0, base + bookAbs * 95 + CONFIG.PRICE_MAX_PCT_SPOT - pricePenalty));
 }
 
-function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '', urlSymbol = symbol) {
+function buildDetails(symbol, level, score, extraLines, linkBase, urlSymbol = symbol) {
   return (
-    `${level.emoji} <b><a href="${linkBase}${urlSymbol}${linkSuffix}">${symbol}</a></b> — ${level.text}\n` +
+    `${level.emoji} <b><a href="${linkBase}${urlSymbol}">${symbol}</a></b> — ${level.text}\n` +
     `   Score: <b>${score.toFixed(0)}/100</b>\n` +
     extraLines
   );
 }
 
 // ────────────────────────────────────────────────
-//  CONTROLLI COPPIE ATTIVE (solo spot)
+//  CONTROLLI COPPIE ATTIVE (aggiornato)
 // ────────────────────────────────────────────────
 async function getActiveControls() {
   const controls = [];
@@ -147,8 +131,8 @@ async function getActiveControls() {
       const isBybit = data.type.includes('Bybit');
       const cvd = isBybit ? await getCvdBybit(symbol, false) : await getCvdBinance(symbol);
       const bookImb = isBybit ? await getBookImbBybit(symbol, false) : await getBookImbBinance(symbol);
-
       const pricePct = await getCurrentPriceChange(symbol, isBybit);
+
       currentScore = calculateScore(Math.abs(cvd), Math.abs(bookImb), pricePct);
 
       if (currentScore >= 85) status = 'Ancora Molto Forte 🔥🔥🔥';
@@ -159,9 +143,7 @@ async function getActiveControls() {
     controls.push(`• <b>${symbol}</b> (${data.type}) → <b>${status}</b> (Score ${currentScore.toFixed(0)})`);
   }
 
-  return controls.length
-    ? `<b>🔄 Controllo Coppie Attive</b>\n\n${controls.join('\n')}\n\n==============================\n\n`
-    : '';
+  return controls.length ? `<b>🔄 Controllo Coppie Attive</b>\n\n${controls.join('\n')}\n\n==============================\n\n` : '';
 }
 
 async function getCurrentPriceChange(symbol, isBybit) {
@@ -173,42 +155,29 @@ async function getCurrentPriceChange(symbol, isBybit) {
       const res = await axios.get(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`, { timeout: 5000 });
       return parseFloat(res.data.priceChangePercent) / 100;
     }
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
 // ────────────────────────────────────────────────
-//  HELPER API CALLS (CVD / Book) - invariati
+//  HELPER (CVD / Book) invariati
 // ────────────────────────────────────────────────
-async function getCvdBybit(symbol, isPerp) {
-  const cat = isPerp ? 'linear' : 'spot';
+async function getCvdBybit(symbol) {
   try {
-    const res = await axios.get(
-      `https://api.bybit.com/v5/market/recent-trade?category=${cat}&symbol=${symbol}&limit=1000`,
-      { timeout: 8000 }
-    );
+    const res = await axios.get(`https://api.bybit.com/v5/market/recent-trade?category=spot&symbol=${symbol}&limit=1000`, { timeout: 8000 });
     const trades = res.data.result.list || [];
-    let delta = 0;
-    let total = 0;
+    let delta = 0, total = 0;
     for (const t of trades) {
       const size = parseFloat(t.size);
       total += size;
       delta += t.side === 'Buy' ? size : -size;
     }
     return total > 0 ? delta / total : 0;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
-async function getBookImbBybit(symbol, isPerp) {
-  const cat = isPerp ? 'linear' : 'spot';
+async function getBookImbBybit(symbol) {
   try {
-    const res = await axios.get(
-      `https://api.bybit.com/v5/market/orderbook?category=${cat}&symbol=${symbol}&limit=20`,
-      { timeout: 8000 }
-    );
+    const res = await axios.get(`https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${symbol}&limit=20`, { timeout: 8000 });
     const d = res.data.result;
     let bids = 0, asks = 0;
     const len = Math.min(20, d.b?.length || 0, d.a?.length || 0);
@@ -218,9 +187,7 @@ async function getBookImbBybit(symbol, isPerp) {
     }
     const total = bids + asks;
     return total > 0 ? (bids - asks) / total : 0;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
 async function getCvdBinance(symbol) {
@@ -234,9 +201,7 @@ async function getCvdBinance(symbol) {
       delta += t.isBuyerMaker ? -q : q;
     }
     return total > 0 ? delta / total : 0;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
 async function getBookImbBinance(symbol) {
@@ -251,13 +216,11 @@ async function getBookImbBinance(symbol) {
     }
     const total = bids + asks;
     return total > 0 ? (bids - asks) / total : 0;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SPOT (LONG + SHORT con parametri invertiti)
+//  ANALISI SPOT - CON NOMENCLATURA COME VUOI TU
 // ────────────────────────────────────────────────
 async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit) {
   const cvdAbs = Math.abs(cvd);
@@ -265,86 +228,73 @@ async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isByb
 
   if (cvdAbs < CONFIG.CVD_MIN_SPOT || bookAbs < CONFIG.BOOK_MIN_IMB) return null;
 
-  const isBullish = cvd > 0 && bookImb > 0;   // CVD e Book devono essere ALLINEATI
+  const isLong = cvd > 0 && bookImb > 0;   // CVD e Book positivi = LONG SQUEEZE
 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
   if (score < CONFIG.MIN_SCORE) return null;
 
-  const level = getLevel(score, isBullish);
+  const level = getLevel(score, isLong);
   if (!level) return null;
 
-  const directionText = isBullish ? 'SHORT SQUEEZE (Rialzo)' : 'LONG SQUEEZE (Ribasso)';
+  const directionText = isLong ? 'LONG SQUEEZE (Rialzo)' : 'SHORT SQUEEZE (Ribasso)';
 
-  const extra = (
-    `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`
-  );
+  const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
   const linkBase = isBybit ? 'https://www.bybit.com/trade/spot/' : 'https://www.binance.com/en/trade/';
   const urlSymbol = isBybit ? symbol : `${symbol.slice(0, -4)}_USDT`;
 
-  const details = buildDetails(symbol, level, score, extra, linkBase, '', urlSymbol);
+  const details = buildDetails(symbol, level, score, extra, linkBase, urlSymbol);
 
   return {
     score,
     details,
-    isBullish,
+    isLong,
     type: `${isBybit ? 'Bybit' : 'Binance'} Spot (${directionText})`
   };
 }
 
 // ────────────────────────────────────────────────
-//  SCAN SPOT UNIFICATO (Bybit + Binance)
+//  SCAN SPOT
 // ────────────────────────────────────────────────
 async function scanSpot() {
-  const longCandidates = [];
-  const shortCandidates = [];
+  const longCandidates = [];   // LONG SQUEEZE (rialzo)
+  const shortCandidates = [];  // SHORT SQUEEZE (ribasso)
 
   // Bybit Spot
   try {
     const res = await axios.get('https://api.bybit.com/v5/market/tickers?category=spot', { timeout: 10000 });
-    const tickers = res.data.result.list || [];
-
-    for (const t of tickers) {
+    for (const t of res.data.result.list || []) {
       const symbol = t.symbol;
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
-
       const base = symbol.slice(0, -4);
       if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
-
       if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) continue;
 
-      const cvd = await getCvdBybit(symbol, false);
-      const bookImb = await getBookImbBybit(symbol, false);
+      const cvd = await getCvdBybit(symbol);
+      const bookImb = await getBookImbBybit(symbol);
 
       const signal = await analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, true);
       if (signal) {
-        (signal.isBullish ? longCandidates : shortCandidates).push(signal);
+        (signal.isLong ? longCandidates : shortCandidates).push(signal);
         updateCooldown(symbol, signal.type, signal.score);
       }
     }
-  } catch (err) {
-    console.error('Errore scan Bybit Spot:', err.message);
-  }
+  } catch (err) { console.error('Errore Bybit Spot:', err.message); }
 
   // Binance Spot
   try {
     const res = await axios.get('https://api.binance.com/api/v3/ticker/24hr', { timeout: 10000 });
-    const tickers = res.data.filter(t => t.symbol.endsWith('USDT'));
-
-    for (const t of tickers) {
+    for (const t of res.data.filter(t => t.symbol.endsWith('USDT'))) {
       const symbol = t.symbol;
       if (!checkCooldown(symbol)) continue;
-
       const base = symbol.slice(0, -4);
       if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.priceChangePercent) / 100;
       const turnover = parseFloat(t.quoteVolume);
-
       if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) continue;
 
       const cvd = await getCvdBinance(symbol);
@@ -352,15 +302,12 @@ async function scanSpot() {
 
       const signal = await analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, false);
       if (signal) {
-        (signal.isBullish ? longCandidates : shortCandidates).push(signal);
+        (signal.isLong ? longCandidates : shortCandidates).push(signal);
         updateCooldown(symbol, signal.type, signal.score);
       }
     }
-  } catch (err) {
-    console.error('Errore scan Binance Spot:', err.message);
-  }
+  } catch (err) { console.error('Errore Binance Spot:', err.message); }
 
-  // Ordina per qualità (score) e prendi solo i migliori 3 per direzione
   longCandidates.sort((a, b) => b.score - a.score);
   shortCandidates.sort((a, b) => b.score - a.score);
 
@@ -371,10 +318,10 @@ async function scanSpot() {
 }
 
 // ────────────────────────────────────────────────
-//  MAIN SCAN
+//  MAIN
 // ────────────────────────────────────────────────
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] Full scan SPOT avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] SCAN SQUEEZE SPOT avviato...`);
   cleanupOldSignals();
 
   const controls = await getActiveControls();
@@ -382,10 +329,10 @@ async function mainScan() {
 
   const sections = [];
   if (spot.long.length > 0) {
-    sections.push(`🔥 SPOT — SHORT SQUEEZE (Bullish)\n\n${spot.long.join('\n\n')}`);
+    sections.push(`🔥 SPOT — LONG SQUEEZE (Rialzo - Vai LONG)\n\n${spot.long.join('\n\n')}`);
   }
   if (spot.short.length > 0) {
-    sections.push(`🔥 SPOT — LONG SQUEEZE (Bearish)\n\n${spot.short.join('\n\n')}`);
+    sections.push(`🔥 SPOT — SHORT SQUEEZE (Ribasso - Vai SHORT)\n\n${spot.short.join('\n\n')}`);
   }
 
   const fullContent = controls + (sections.length > 0 ? sections.join('\n\n=====================\n\n') : '');
@@ -400,10 +347,8 @@ async function mainScan() {
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 SQUEEZE SPOT SCANNER v3.7 (solo spot + long/short) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
+console.log(`🚀 SQUEEZE SPOT SCANNER v3.8 (Long = LONG | Short = SHORT) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
-mainScan().catch(err => console.error('Errore avvio scan iniziale:', err.message));
+mainScan().catch(err => console.error('Errore avvio:', err.message));
 
-setInterval(() => {
-  mainScan().catch(err => console.error('Errore durante scan periodico:', err.message));
-}, CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
+setInterval(() => mainScan().catch(err => console.error('Errore scan:', err.message)), CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
