@@ -338,7 +338,7 @@ async function mainScan() {
   const fullContent = controls + (sections.length > 0 ? sections.join('\n\n=====================\n\n') : '');
 
   if (fullContent.trim()) {
-    await sendTelegram(fullContent, '📈 SQUEEZE SPOT SCAN 📉');
+    await sendTelegram(fullContent, '📈 SQUEEZE SCAN 📉');
   } else {
     console.log('Nessun segnale valido in questo scan');
   }
