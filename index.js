@@ -91,9 +91,9 @@ function updateCooldown(symbol, type, score) {
 }
 
 // ────────────────────────────────────────────────
-//  LEVEL & SCORE - NOMENCLATURA CORRETTA
+//  LEVEL & SCORE
 // ────────────────────────────────────────────────
-function getLevel(score, isLong) {   // isLong = true → LONG SQUEEZE (rialzo)
+function getLevel(score, isLong) {
   if (score >= 90) return { emoji: '🚀🚀🚀', text: isLong ? 'ULTRA LONG SQUEEZE' : 'ULTRA SHORT SQUEEZE' };
   if (score >= 80) return { emoji: '🚀🚀', text: isLong ? 'SUPER LONG SQUEEZE' : 'SUPER SHORT SQUEEZE' };
   if (score >= 70) return { emoji: '🚀', text: isLong ? 'BIG LONG SQUEEZE' : 'BIG SHORT SQUEEZE' };
@@ -106,16 +106,19 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
   return Math.min(100, Math.max(0, base + bookAbs * 95 + CONFIG.PRICE_MAX_PCT_SPOT - pricePenalty));
 }
 
-function buildDetails(symbol, level, score, extraLines, linkBase, urlSymbol = symbol) {
+// ────────────────────────────────────────────────
+//  BUILD DETAILS - SENZA LINK
+// ────────────────────────────────────────────────
+function buildDetails(symbol, level, score, extraLines) {
   return (
-    `${level.emoji} <b><a href="${linkBase}${urlSymbol}">${symbol}</a></b> — ${level.text}\n` +
+    `${level.emoji} <b>${symbol}</b> — ${level.text}\n` +
     `   Score: <b>${score.toFixed(0)}/100</b>\n` +
     extraLines
   );
 }
 
 // ────────────────────────────────────────────────
-//  CONTROLLI COPPIE ATTIVE (aggiornato)
+//  CONTROLLI COPPIE ATTIVE
 // ────────────────────────────────────────────────
 async function getActiveControls() {
   const controls = [];
@@ -129,8 +132,8 @@ async function getActiveControls() {
 
     try {
       const isBybit = data.type.includes('Bybit');
-      const cvd = isBybit ? await getCvdBybit(symbol, false) : await getCvdBinance(symbol);
-      const bookImb = isBybit ? await getBookImbBybit(symbol, false) : await getBookImbBinance(symbol);
+      const cvd = isBybit ? await getCvdBybit(symbol) : await getCvdBinance(symbol);
+      const bookImb = isBybit ? await getBookImbBybit(symbol) : await getBookImbBinance(symbol);
       const pricePct = await getCurrentPriceChange(symbol, isBybit);
 
       currentScore = calculateScore(Math.abs(cvd), Math.abs(bookImb), pricePct);
@@ -159,7 +162,7 @@ async function getCurrentPriceChange(symbol, isBybit) {
 }
 
 // ────────────────────────────────────────────────
-//  HELPER (CVD / Book) invariati
+//  HELPER CVD / Book
 // ────────────────────────────────────────────────
 async function getCvdBybit(symbol) {
   try {
@@ -220,7 +223,7 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SPOT - CON NOMENCLATURA COME VUOI TU
+//  ANALISI SPOT
 // ────────────────────────────────────────────────
 async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit) {
   const cvdAbs = Math.abs(cvd);
@@ -228,7 +231,7 @@ async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isByb
 
   if (cvdAbs < CONFIG.CVD_MIN_SPOT || bookAbs < CONFIG.BOOK_MIN_IMB) return null;
 
-  const isLong = cvd > 0 && bookImb > 0;   // CVD e Book positivi = LONG SQUEEZE
+  const isLong = cvd > 0 && bookImb > 0;
 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
   if (score < CONFIG.MIN_SCORE) return null;
@@ -240,10 +243,7 @@ async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isByb
 
   const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
 
-  const linkBase = isBybit ? 'https://www.bybit.com/trade/spot/' : 'https://www.binance.com/en/trade/';
-  const urlSymbol = isBybit ? symbol : `${symbol.slice(0, -4)}_USDT`;
-
-  const details = buildDetails(symbol, level, score, extra, linkBase, urlSymbol);
+  const details = buildDetails(symbol, level, score, extra);
 
   return {
     score,
@@ -257,8 +257,8 @@ async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isByb
 //  SCAN SPOT
 // ────────────────────────────────────────────────
 async function scanSpot() {
-  const longCandidates = [];   // LONG SQUEEZE (rialzo)
-  const shortCandidates = [];  // SHORT SQUEEZE (ribasso)
+  const longCandidates = [];
+  const shortCandidates = [];
 
   // Bybit Spot
   try {
@@ -347,7 +347,7 @@ async function mainScan() {
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 SQUEEZE SPOT SCANNER v3.8 (Long = LONG | Short = SHORT) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 SQUEEZE SPOT SCANNER v3.9 (senza link exchange) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
