@@ -4,7 +4,7 @@ const fs = require('fs');
 const TELEGRAM_BOT_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
 const TELEGRAM_CHAT_ID = '820279313';
 
-const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 ore ← MODIFICATO
+const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 ore
 const LAST_FILE = './last_signals.json';
 
 let lastSignals = {};
@@ -94,7 +94,7 @@ function updateCooldown(symbol, type, score) {
 }
 
 // ────────────────────────────────────────────────
-//  LEVEL & SCORE - MIGLIORATO
+//  LEVEL & SCORE
 // ────────────────────────────────────────────────
 function getLevel(score, isLong) {
   if (score >= 90) {
@@ -119,7 +119,7 @@ function getLevel(score, isLong) {
 }
 
 function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
-  const base = isPerp ? oiOrCvd * 2.8 : oiOrCvd * 2.2; // ← peso aumentato su Perp
+  const base = isPerp ? oiOrCvd * 2.8 : oiOrCvd * 2.2;
   const pricePenalty = Math.abs(pricePct) * 100;
   const priceBonus = isPerp ? CONFIG.PRICE_MAX_PCT_PERP : CONFIG.PRICE_MAX_PCT_SPOT;
 
@@ -127,11 +127,11 @@ function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
 }
 
 // ────────────────────────────────────────────────
-//  BUILD MESSAGE
+//  BUILD MESSAGE - SENZA LINK
 // ────────────────────────────────────────────────
-function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '', urlSymbol = symbol) {
+function buildDetails(symbol, level, score, extraLines) {
   return (
-    `${level.emoji} <b><a href="${linkBase}${urlSymbol}${linkSuffix}">${symbol}</a></b> — ${level.text}\n` +
+    `${level.emoji} <b>${symbol}</b> — ${level.text}\n` +
     `   Score: <b>${score.toFixed(0)}/100</b>\n` +
     extraLines
   );
@@ -141,7 +141,6 @@ function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '
 //  CONTROLLI COPPIE ATTIVE
 // ────────────────────────────────────────────────
 async function getActiveControls() {
-  // (codice identico all'originale - non modificato)
   const controls = [];
   const now = Date.now();
 
@@ -196,7 +195,7 @@ async function getActiveControls() {
 }
 
 // ────────────────────────────────────────────────
-//  SCAN BYBIT PERPETUAL - MIGLIORATO
+//  SCAN BYBIT PERPETUAL
 // ────────────────────────────────────────────────
 async function scanBybitPerp() {
   const candidates = [];
@@ -246,7 +245,7 @@ async function scanBybitPerp() {
         `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: ${(turnover / 1e6).toFixed(1)}M`
       );
 
-      const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/usdt/');
+      const details = buildDetails(symbol, level, score, extra);
 
       candidates.push({ score, details, isLong });
       updateCooldown(symbol, isLong ? 'Bybit Perp (Rialzo - Short Squeeze)' : 'Bybit Perp (Ribasso - Long Squeeze)', score);
@@ -302,7 +301,7 @@ async function scanBybitSpot() {
         `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: ${(turnover / 1e6).toFixed(1)}M`
       );
 
-      const details = buildDetails(symbol, level, score, extra, 'https://www.bybit.com/trade/spot/');
+      const details = buildDetails(symbol, level, score, extra);
 
       candidates.push({ score, details });
       updateCooldown(symbol, 'Bybit Spot (Rialzo)', score);
@@ -354,15 +353,7 @@ async function scanBinanceSpot() {
         `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`
       );
 
-      const details = buildDetails(
-        symbol,
-        level,
-        score,
-        extra,
-        'https://www.binance.com/en/trade/',
-        '',
-        `${base}_USDT`
-      );
+      const details = buildDetails(symbol, level, score, extra);
 
       candidates.push({ score, details });
       updateCooldown(symbol, 'Binance Spot (Rialzo)', score);
@@ -376,7 +367,7 @@ async function scanBinanceSpot() {
 }
 
 // ────────────────────────────────────────────────
-//  HELPER API CALLS - CVD Bybit migliorato
+//  HELPER API CALLS
 // ────────────────────────────────────────────────
 async function getOiChange(symbol) {
   try {
@@ -399,7 +390,7 @@ async function getCvdBybit(symbol, isPerp) {
   const cat = isPerp ? 'linear' : 'spot';
   try {
     const res = await axios.get(
-      `https://api.bybit.com/v5/market/recent-trade?category=${cat}&symbol=${symbol}&limit=1000`, // ← aumentato
+      `https://api.bybit.com/v5/market/recent-trade?category=${cat}&symbol=${symbol}&limit=1000`,
       { timeout: 8000 }
     );
     const trades = res.data.result.list || [];
@@ -484,7 +475,7 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  MAIN SCAN - HEADER MIGLIORATI
+//  MAIN SCAN
 // ────────────────────────────────────────────────
 async function mainScan() {
   console.log(`[${new Date().toLocaleTimeString('it-IT')}] Full scan avviato...`);
