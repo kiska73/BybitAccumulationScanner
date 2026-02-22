@@ -25,14 +25,12 @@ function cleanupOldSignals() {
   const now = Date.now();
   const cutoff = now - 24 * 60 * 60 * 1000;
   let cleaned = 0;
-
   for (const key of Object.keys(lastSignals)) {
     if (lastSignals[key].timestamp < cutoff) {
       delete lastSignals[key];
       cleaned++;
     }
   }
-
   if (cleaned > 0) {
     saveLastSignals();
     console.log(`🧹 Puliti ${cleaned} segnali vecchi`);
@@ -62,9 +60,7 @@ async function sendTelegram(content, title) {
     console.warn('⚠️ Token Telegram non configurato');
     return;
   }
-
   const header = `<b>${title}</b>\n\n`;
-
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
@@ -91,13 +87,19 @@ function updateCooldown(symbol, type, score) {
 }
 
 // ────────────────────────────────────────────────
-//  LEVEL & SCORE
+//  LEVEL + POTENZIALITÀ (3 livelli chiari)
 // ────────────────────────────────────────────────
 function getLevel(score, isLong) {
-  if (score >= 90) return { emoji: '🚀🚀🚀', text: isLong ? 'ULTRA LONG SQUEEZE' : 'ULTRA SHORT SQUEEZE' };
-  if (score >= 80) return { emoji: '🚀🚀', text: isLong ? 'SUPER LONG SQUEEZE' : 'SUPER SHORT SQUEEZE' };
-  if (score >= 70) return { emoji: '🚀', text: isLong ? 'BIG LONG SQUEEZE' : 'BIG SHORT SQUEEZE' };
+  if (score >= 90) return { emoji: '🚀🚀🚀', text: isLong ? 'ULTRA LONG EXPLOSION' : 'ULTRA SHORT EXPLOSION' };
+  if (score >= 80) return { emoji: '🚀🚀', text: isLong ? 'SUPER LONG EXPLOSION' : 'SUPER SHORT EXPLOSION' };
+  if (score >= 70) return { emoji: '🚀', text: isLong ? 'BIG LONG EXPLOSION' : 'BIG SHORT EXPLOSION' };
   return null;
+}
+
+function getPotential(score) {
+  if (score >= 90) return '🔥🔥🔥 NUCLEARE (20%+ in poche ore)';
+  if (score >= 80) return '🔥🔥 ESTREMA (12-20%)';
+  return '🔥 BUONA (6-12%)';
 }
 
 function calculateScore(cvdAbs, bookAbs, pricePct) {
@@ -106,9 +108,6 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
   return Math.min(100, Math.max(0, base + bookAbs * 95 + CONFIG.PRICE_MAX_PCT_SPOT - pricePenalty));
 }
 
-// ────────────────────────────────────────────────
-//  BUILD DETAILS - SENZA LINK
-// ────────────────────────────────────────────────
 function buildDetails(symbol, level, score, extraLines) {
   return (
     `${level.emoji} <b>${symbol}</b> — ${level.text}\n` +
@@ -146,7 +145,9 @@ async function getActiveControls() {
     controls.push(`• <b>${symbol}</b> (${data.type}) → <b>${status}</b> (Score ${currentScore.toFixed(0)})`);
   }
 
-  return controls.length ? `<b>🔄 Controllo Coppie Attive</b>\n\n${controls.join('\n')}\n\n==============================\n\n` : '';
+  return controls.length
+    ? `<b>🔄 Controllo Coppie Attive</b>\n\n${controls.join('\n')}\n\n==============================\n\n`
+    : '';
 }
 
 async function getCurrentPriceChange(symbol, isBybit) {
@@ -162,7 +163,7 @@ async function getCurrentPriceChange(symbol, isBybit) {
 }
 
 // ────────────────────────────────────────────────
-//  HELPER CVD / Book
+//  HELPER CVD / BOOK
 // ────────────────────────────────────────────────
 async function getCvdBybit(symbol) {
   try {
@@ -223,9 +224,12 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SPOT
+//  ANALISI SEGNALE + ESCLUSIONE STABLECOIN
 // ────────────────────────────────────────────────
 async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit) {
+  const base = symbol.replace('USDT', '');
+  if (STABLE_BASES.includes(base)) return null;   // ← ESCLUDE USDCUSDT, TUSDUSDT, FDUSDUSDT ecc.
+
   const cvdAbs = Math.abs(cvd);
   const bookAbs = Math.abs(bookImb);
 
@@ -239,9 +243,14 @@ async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isByb
   const level = getLevel(score, isLong);
   if (!level) return null;
 
-  const directionText = isLong ? 'LONG SQUEEZE (Rialzo)' : 'SHORT SQUEEZE (Ribasso)';
+  const potential = getPotential(score);
+  const directionText = isLong ? 'LONG EXPLOSION (Rialzo → Vai LONG)' : 'SHORT EXPLOSION (Ribasso → Vai SHORT)';
 
-  const extra = `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`;
+  const extra = (
+    `   Potenzialità: <b>${potential}</b>\n` +
+    `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
+    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M`
+  );
 
   const details = buildDetails(symbol, level, score, extra);
 
@@ -266,8 +275,6 @@ async function scanSpot() {
     for (const t of res.data.result.list || []) {
       const symbol = t.symbol;
       if (!symbol.endsWith('USDT') || !checkCooldown(symbol)) continue;
-      const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
@@ -290,8 +297,6 @@ async function scanSpot() {
     for (const t of res.data.filter(t => t.symbol.endsWith('USDT'))) {
       const symbol = t.symbol;
       if (!checkCooldown(symbol)) continue;
-      const base = symbol.slice(0, -4);
-      if (STABLE_BASES.includes(base)) continue;
 
       const pricePct = parseFloat(t.priceChangePercent) / 100;
       const turnover = parseFloat(t.quoteVolume);
@@ -321,7 +326,7 @@ async function scanSpot() {
 //  MAIN
 // ────────────────────────────────────────────────
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] SCAN SQUEEZE SPOT avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] EXPLOSION SCAN avviato...`);
   cleanupOldSignals();
 
   const controls = await getActiveControls();
@@ -329,16 +334,16 @@ async function mainScan() {
 
   const sections = [];
   if (spot.long.length > 0) {
-    sections.push(`🔥 SPOT — LONG SQUEEZE (Rialzo - Vai LONG)\n\n${spot.long.join('\n\n')}`);
+    sections.push(`🔥 LONG EXPLOSION (Rialzo — Vai LONG)\n\n${spot.long.join('\n\n')}`);
   }
   if (spot.short.length > 0) {
-    sections.push(`🔥 SPOT — SHORT SQUEEZE (Ribasso - Vai SHORT)\n\n${spot.short.join('\n\n')}`);
+    sections.push(`🔥 SHORT EXPLOSION (Ribasso — Vai SHORT)\n\n${spot.short.join('\n\n')}`);
   }
 
   const fullContent = controls + (sections.length > 0 ? sections.join('\n\n=====================\n\n') : '');
 
   if (fullContent.trim()) {
-    await sendTelegram(fullContent, '📈 SQUEEZE SCAN 📉');
+    await sendTelegram(fullContent, '📈 EXPLOSION POTENTIAL SCAN 📉');
   } else {
     console.log('Nessun segnale valido in questo scan');
   }
@@ -347,8 +352,10 @@ async function mainScan() {
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 SQUEEZE SPOT SCANNER v3.9 (senza link exchange) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 EXPLOSION POTENTIAL SCANNER v4.1 (senza stablecoin + 3 livelli) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
-setInterval(() => mainScan().catch(err => console.error('Errore scan:', err.message)), CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
+setInterval(() => {
+  mainScan().catch(err => console.error('Errore scan:', err.message));
+}, CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
