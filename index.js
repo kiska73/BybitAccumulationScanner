@@ -4,10 +4,10 @@ const fs = require('fs');
 const TELEGRAM_BOT_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
 const TELEGRAM_CHAT_ID = '820279313';
 
-const COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 ore
+const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 ore ← MODIFICATO
 const LAST_FILE = './last_signals.json';
 
-let lastSignals = {}; // { symbol: { timestamp, type, lastScore } }
+let lastSignals = {};
 
 if (fs.existsSync(LAST_FILE)) {
   try {
@@ -23,7 +23,7 @@ function saveLastSignals() {
 
 function cleanupOldSignals() {
   const now = Date.now();
-  const cutoff = now - 24 * 60 * 60 * 1000; // 24 ore
+  const cutoff = now - 24 * 60 * 60 * 1000;
   let cleaned = 0;
 
   for (const key of Object.keys(lastSignals)) {
@@ -35,7 +35,7 @@ function cleanupOldSignals() {
 
   if (cleaned > 0) {
     saveLastSignals();
-    console.log(`🧹 Puliti ${cleaned} segnali vecchi dal JSON`);
+    console.log(`🧹 Puliti ${cleaned} segnali vecchi`);
   }
 }
 
@@ -43,10 +43,10 @@ const CONFIG = {
   PRICE_MAX_PCT_PERP: 5.0,
   PRICE_MAX_PCT_SPOT: 2.0,
   TURNOVER_MIN: 250000,
-  OI_MIN: 1.0,
-  CVD_MIN_PERP: 0.03,
+  OI_MIN: 0.8,               // ← abbassato
+  CVD_MIN_PERP: 0.025,       // ← abbassato
   CVD_MIN_SPOT: 0.08,
-  BOOK_MIN_IMB: 0.03,
+  BOOK_MIN_IMB: 0.025,       // ← abbassato
   MAX_SIGNALS_PER_TYPE: 8,
   SCAN_INTERVAL_MIN: 30,
   MIN_SCORE: 70,
@@ -62,7 +62,7 @@ const STABLE_BASES = [
 // ────────────────────────────────────────────────
 async function sendTelegram(content, title) {
   if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN.includes('INSERISCI')) {
-    console.warn('⚠️ Token Telegram non configurato correttamente');
+    console.warn('⚠️ Token Telegram non configurato');
     return;
   }
 
@@ -75,7 +75,7 @@ async function sendTelegram(content, title) {
       parse_mode: 'HTML',
       disable_web_page_preview: false,
     });
-    console.log(`✅ Inviato messaggio Telegram: ${title}`);
+    console.log(`✅ Telegram inviato: ${title}`);
   } catch (err) {
     console.error('Errore invio Telegram:', err.message);
   }
@@ -94,32 +94,32 @@ function updateCooldown(symbol, type, score) {
 }
 
 // ────────────────────────────────────────────────
-//  LEVEL & SCORE
+//  LEVEL & SCORE - MIGLIORATO
 // ────────────────────────────────────────────────
 function getLevel(score, isLong) {
   if (score >= 90) {
     return {
       emoji: '🚀🚀🚀',
-      text: isLong ? 'ULTRA SHORT SQUEEZE' : 'ULTRA LONG SQUEEZE',
+      text: isLong ? 'ULTRA SQUEEZE' : 'ULTRA LONG SQUEEZE',
     };
   }
   if (score >= 80) {
     return {
       emoji: '🚀🚀',
-      text: isLong ? 'SUPER SHORT SQUEEZE' : 'SUPER LONG SQUEEZE',
+      text: isLong ? 'SUPER SQUEEZE' : 'SUPER LONG SQUEEZE',
     };
   }
   if (score >= 70) {
     return {
       emoji: '🚀',
-      text: isLong ? 'BIG SHORT SQUEEZE' : 'BIG LONG SQUEEZE',
+      text: isLong ? 'BIG SQUEEZE' : 'BIG LONG SQUEEZE',
     };
   }
   return null;
 }
 
 function calculateScore(oiOrCvd, bookImb, pricePct, isPerp) {
-  const base = isPerp ? oiOrCvd * 1.45 : oiOrCvd * 2.2;
+  const base = isPerp ? oiOrCvd * 2.8 : oiOrCvd * 2.2; // ← peso aumentato su Perp
   const pricePenalty = Math.abs(pricePct) * 100;
   const priceBonus = isPerp ? CONFIG.PRICE_MAX_PCT_PERP : CONFIG.PRICE_MAX_PCT_SPOT;
 
@@ -138,9 +138,10 @@ function buildDetails(symbol, level, score, extraLines, linkBase, linkSuffix = '
 }
 
 // ────────────────────────────────────────────────
-//  CONTROLLI COPPIE ATTIVE ( monitoraggio )
+//  CONTROLLI COPPIE ATTIVE
 // ────────────────────────────────────────────────
 async function getActiveControls() {
+  // (codice identico all'originale - non modificato)
   const controls = [];
   const now = Date.now();
 
@@ -195,7 +196,7 @@ async function getActiveControls() {
 }
 
 // ────────────────────────────────────────────────
-//  SCAN BYBIT PERPETUAL
+//  SCAN BYBIT PERPETUAL - MIGLIORATO
 // ────────────────────────────────────────────────
 async function scanBybitPerp() {
   const candidates = [];
@@ -214,9 +215,7 @@ async function scanBybitPerp() {
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
 
-      if (Math.abs(pricePct) * 100 >= CONFIG.PRICE_MAX_PCT_PERP || turnover < CONFIG.TURNOVER_MIN) {
-        continue;
-      }
+      if (Math.abs(pricePct) * 100 >= CONFIG.PRICE_MAX_PCT_PERP || turnover < CONFIG.TURNOVER_MIN) continue;
 
       const oiPct = await getOiChange(symbol);
       if (oiPct < CONFIG.OI_MIN) continue;
@@ -284,9 +283,7 @@ async function scanBybitSpot() {
       const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
 
-      if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) {
-        continue;
-      }
+      if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) continue;
 
       const cvd = await getCvdBybit(symbol, false);
       if (cvd < CONFIG.CVD_MIN_SPOT) continue;
@@ -338,9 +335,7 @@ async function scanBinanceSpot() {
       const pricePct = parseFloat(t.priceChangePercent) / 100;
       const turnover = parseFloat(t.quoteVolume);
 
-      if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) {
-        continue;
-      }
+      if (Math.abs(pricePct) * 100 > CONFIG.PRICE_MAX_PCT_SPOT || turnover < CONFIG.TURNOVER_MIN) continue;
 
       const cvd = await getCvdBinance(symbol);
       if (cvd < CONFIG.CVD_MIN_SPOT) continue;
@@ -381,7 +376,7 @@ async function scanBinanceSpot() {
 }
 
 // ────────────────────────────────────────────────
-//  HELPER API CALLS
+//  HELPER API CALLS - CVD Bybit migliorato
 // ────────────────────────────────────────────────
 async function getOiChange(symbol) {
   try {
@@ -404,7 +399,7 @@ async function getCvdBybit(symbol, isPerp) {
   const cat = isPerp ? 'linear' : 'spot';
   try {
     const res = await axios.get(
-      `https://api.bybit.com/v5/market/recent-trade?category=${cat}&symbol=${symbol}&limit=500`,
+      `https://api.bybit.com/v5/market/recent-trade?category=${cat}&symbol=${symbol}&limit=1000`, // ← aumentato
       { timeout: 8000 }
     );
     const trades = res.data.result.list || [];
@@ -489,7 +484,7 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  MAIN SCAN
+//  MAIN SCAN - HEADER MIGLIORATI
 // ────────────────────────────────────────────────
 async function mainScan() {
   console.log(`[${new Date().toLocaleTimeString('it-IT')}] Full scan avviato...`);
@@ -504,16 +499,16 @@ async function mainScan() {
   const sections = [];
 
   if (perp.long.length > 0) {
-    sections.push(`BYBIT PERP — Long Hit! (SHORT SQUEEZE)\n\n${perp.long.join('\n\n')}`);
+    sections.push(`🔥 BYBIT PERP — SHORT SQUEEZE (Bullish)\n\n${perp.long.join('\n\n')}`);
   }
   if (perp.short.length > 0) {
-    sections.push(`BYBIT PERP — Short Hit! (LONG SQUEEZE)\n\n${perp.short.join('\n\n')}`);
+    sections.push(`🔥 BYBIT PERP — LONG SQUEEZE (Bearish)\n\n${perp.short.join('\n\n')}`);
   }
   if (bybitSpot.length > 0) {
-    sections.push(`BYBIT SPOT — Long Hit!\n\n${bybitSpot.join('\n\n')}`);
+    sections.push(`🔥 BYBIT SPOT — LONG SQUEEZE\n\n${bybitSpot.join('\n\n')}`);
   }
   if (binanceSpot.length > 0) {
-    sections.push(`BINANCE SPOT — Long Hit!\n\n${binanceSpot.join('\n\n')}`);
+    sections.push(`🔥 BINANCE SPOT — LONG SQUEEZE\n\n${binanceSpot.join('\n\n')}`);
   }
 
   const fullContent = controls + (sections.length > 0 ? sections.join('\n\n=====================\n\n') : '');
@@ -528,7 +523,7 @@ async function mainScan() {
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 FULL SCANNER v3.5 (con Controllo Coppie Attive) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
+console.log(`🚀 FULL SCANNER v3.6 (cooldown 4 ore) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} minuti`);
 
 mainScan().catch(err => console.error('Errore avvio scan iniziale:', err.message));
 
