@@ -42,9 +42,9 @@ const CONFIG = {
   TURNOVER_MIN: 250000,
   CVD_MIN_SPOT: 0.105,              // più selettivo
   BOOK_MIN_IMB: 0.04,               // book davvero carico
-  CONSOLIDATION_MAX_RANGE_PCT: 3.8, // range massimo nelle ultime ~7 ore
-  CONSOLIDATION_CANDLES: 28,        // 28 candele 15m = ~7 ore
-  MAX_SIGNALS_PER_TYPE: 3,
+  CONSOLIDATION_MAX_RANGE_PCT: 3.5, // range massimo nelle ultime ~7 ore
+  CONSOLIDATION_CANDLES: 20,        // 28 candele 15m = ~7 ore
+  MAX_SIGNALS_PER_TYPE: 5,
   SCAN_INTERVAL_MIN: 30,
   MIN_SCORE: 80,                    // qualità alta
   BOOK_DEPTH_LIMIT: 100,
@@ -102,7 +102,7 @@ function getLevel(score, isLong) {
 }
 
 function getPotential(score) {
-  if (score >= 92) return '🔥🔥🔥 NUCLEARE (22%+ in poche ore)';
+  if (score >= 92) return '🔥🔥🔥 NUCLEARE (22%+)';
   if (score >= 86) return '🔥🔥 ESTREMA (14-22%)';
   return '🔥 BUONA (8-14%)';
 }
