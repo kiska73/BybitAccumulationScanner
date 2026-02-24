@@ -36,50 +36,50 @@ function cleanupOldSignals() {
   }
 }
 
-// ====================== CONFIGURAZIONE TIER ======================
+// ====================== CONFIGURAZIONE LIVELLI ======================
 const CONFIG = {
-  TURNOVER_MIN: 180000,
-  BOOK_DEPTH_LIMIT: 100,
-  CVD_LIMIT_BYBIT: 2000,
-  CVD_LIMIT_BINANCE: 1000,
-  SCAN_INTERVAL_MIN: 30,
-  MAX_SIGNALS_PER_TIER: 8,
+  TURNOVER_MIN: 2000000,             // Aumentato a 2M per qualità
+  BOOK_DEPTH_LIMIT: 150,             // Più profondità
+  CVD_LIMIT_BYBIT: 3000,             // Più dati CVD
+  CVD_LIMIT_BINANCE: 1500,           // Più dati CVD
+  SCAN_INTERVAL_MIN: 20,             // Scan più frequenti ma selettivi
+  MAX_SIGNALS_PER_LEVEL: 4,          // Pochi segnali (max 4 per livello)
 };
 
-const TIERS = {
-  NUCLEAR: {
-    name: '☢️ NUCLEAR EXPLOSION',
-    minScore: 88,
-    minCvd: 0.112,
-    minBook: 0.045,
-    maxConsRange: 4.0,
-    maxPricePct: 1.8,
-    emoji: '☢️'
+const LEVELS = {
+  ULTRA: {
+    name: '🚀🚀🚀 ULTRA EXPLOSION',
+    minScore: 92,                    // Più selettivo
+    minCvd: 0.135,                   // Più alto
+    minBook: 0.058,                  // Più alto
+    maxConsRange: 3.2,               // Range stretto
+    maxPricePct: 1.2,                // Meno variazione
+    emoji: '🚀🚀🚀'
   },
-  STRONG: {
-    name: '🚀🚀 STRONG EXPLOSION',
-    minScore: 79,
-    minCvd: 0.085,
-    minBook: 0.029,
-    maxConsRange: 5.5,
-    maxPricePct: 2.8,
+  SUPER: {
+    name: '🚀🚀 SUPER EXPLOSION',
+    minScore: 85,                    // Più selettivo
+    minCvd: 0.105,                   // Più alto
+    minBook: 0.040,                  // Più alto
+    maxConsRange: 4.2,               // Stretto
+    maxPricePct: 1.8,                // Ridotto
+    emoji: '🚀🚀'
+  },
+  BIG: {
+    name: '🚀 BIG EXPLOSION',         // Rimossa "ACCUMULATION SETUP"
+    minScore: 78,                    // Più selettivo (niente schifo)
+    minCvd: 0.085,                   // Più alto
+    minBook: 0.030,                  // Più alto
+    maxConsRange: 5.5,               // Stretto
+    maxPricePct: 2.5,                // Ridotto
     emoji: '🚀'
-  },
-  SOLID: {
-    name: '📈 GOOD ACCUMULATION SETUP',
-    minScore: 71,
-    minCvd: 0.065,
-    minBook: 0.021,
-    maxConsRange: 7.2,
-    maxPricePct: 4.0,
-    emoji: '📈'
   }
 };
 
-const COOLDOWN_PER_TIER = {
-  NUCLEAR: 5 * 60 * 60 * 1000,   // 5 ore
-  STRONG:  3.5 * 60 * 60 * 1000, // 3.5 ore
-  SOLID:   2 * 60 * 60 * 1000    // 2 ore
+const COOLDOWN_PER_LEVEL = {
+  ULTRA: 7 * 60 * 60 * 1000,   // 7 ore (rarissimi)
+  SUPER: 5 * 60 * 60 * 1000,   // 5 ore
+  BIG:   3 * 60 * 60 * 1000    // 3 ore
 };
 
 const STABLE_BASES = [
@@ -110,44 +110,37 @@ async function sendTelegram(content, title) {
 }
 
 // ────────────────────────────────────────────────
-//  COOLDOWN PER TIER
+//  COOLDOWN PER LIVELLO
 // ────────────────────────────────────────────────
-function checkCooldown(symbol, tier) {
+function checkCooldown(symbol, level) {
   const last = lastSignals[symbol];
   if (!last) return true;
-  return Date.now() - last.timestamp > COOLDOWN_PER_TIER[tier];
+  return Date.now() - last.timestamp > COOLDOWN_PER_LEVEL[level];
 }
 
-function updateCooldown(symbol, tier, score) {
+function updateCooldown(symbol, level, score) {
   lastSignals[symbol] = { 
     timestamp: Date.now(), 
-    tier: tier,
+    level: level,
     lastScore: score 
   };
   saveLastSignals();
 }
 
 // ────────────────────────────────────────────────
-//  LEVEL + POTENZIALITÀ
+//  POTENZIALITÀ (migliorata, solo buoni)
 // ────────────────────────────────────────────────
-function getLevel(score, isLong) {
-  if (score >= 92) return { emoji: '🚀🚀🚀', text: isLong ? 'ULTRA LONG EXPLOSION' : 'ULTRA SHORT EXPLOSION' };
-  if (score >= 86) return { emoji: '🚀🚀', text: isLong ? 'SUPER LONG EXPLOSION' : 'SUPER SHORT EXPLOSION' };
-  if (score >= 80) return { emoji: '🚀', text: isLong ? 'BIG LONG EXPLOSION' : 'BIG SHORT EXPLOSION' };
-  return { emoji: '📈', text: isLong ? 'LONG SETUP' : 'SHORT SETUP' };
-}
-
 function getPotential(score) {
-  if (score >= 92) return '🔥🔥🔥 NUCLEARE (22%+)';
-  if (score >= 86) return '🔥🔥 ESTREMA (14-22%)';
-  if (score >= 79) return '🔥 FORTE (10-16%)';
-  return '📈 BUONA (7-12%)';
+  if (score >= 95) return '🔥🔥🔥 NUCLEARE (25%+)';
+  if (score >= 88) return '🔥🔥 ESTREMA (16-25%)';
+  if (score >= 82) return '🔥 FORTE (11-16%)';
+  return '🔥 SOLIDA (8-12%)';  // Solo "solida" ora
 }
 
 function calculateScore(cvdAbs, bookAbs, pricePct) {
-  const base = cvdAbs * 2.45;
-  const pricePenalty = Math.abs(pricePct) * 100 * 0.6; // penalty più morbida
-  return Math.min(100, Math.max(0, base + bookAbs * 98 - pricePenalty));
+  const base = cvdAbs * 2.85;  // Peso CVD aumentato per qualità
+  const pricePenalty = Math.abs(pricePct) * 100 * 0.45; // Penalty ridotta
+  return Math.min(100, Math.max(0, base + bookAbs * 120 - pricePenalty));  // Peso book aumentato
 }
 
 // ────────────────────────────────────────────────
@@ -156,7 +149,7 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
 async function isInConsolidation(symbol, isBybit, maxRangePct) {
   try {
     const interval = '15';
-    const limit = 26;
+    const limit = 32;  // ~8 ore
     let url;
     if (isBybit) {
       url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=${interval}&limit=${limit}`;
@@ -165,7 +158,7 @@ async function isInConsolidation(symbol, isBybit, maxRangePct) {
     }
     const res = await axios.get(url, { timeout: 8000 });
     const klines = isBybit ? res.data.result : res.data;
-    if (klines.length < 12) return false;
+    if (klines.length < 16) return false;
 
     let high = -Infinity, low = Infinity;
     for (const k of klines) {
@@ -182,48 +175,48 @@ async function isInConsolidation(symbol, isBybit, maxRangePct) {
 }
 
 // ────────────────────────────────────────────────
-//  BUILD DETAILS
+//  BUILD DETAILS (semplificato, pochi dati)
 // ────────────────────────────────────────────────
 function buildDetails(symbol, level, score, extraLines) {
   return (
     `${level.emoji} <b>${symbol}</b> — ${level.text}\n` +
-    `   Score: <b>${score.toFixed(0)}/100</b>\n` +
+    `   Score: <b>${score.toFixed(0)}</b>\n` +
     extraLines
   );
 }
 
 // ────────────────────────────────────────────────
-//  CONTROLLI COPPIE ATTIVE
+//  CONTROLLI COPPIE ATTIVE (semplificato)
 // ────────────────────────────────────────────────
 async function getActiveControls() {
   const controls = [];
   const now = Date.now();
 
   for (const [symbol, data] of Object.entries(lastSignals)) {
-    if (now - data.timestamp > 6 * 60 * 60 * 1000) continue;
+    if (now - data.timestamp > 10 * 60 * 60 * 1000) continue;
 
-    let status = 'In monitoraggio';
+    let status = 'Monitor';
     let currentScore = data.lastScore || 0;
 
     try {
-      const isBybit = await getCurrentPriceChange(symbol, true).then(() => true).catch(() => false); // piccolo hack per capire exchange
+      const isBybit = await getCurrentPriceChange(symbol, true).then(() => true).catch(() => false);
       const cvd = isBybit ? await getCvdBybit(symbol) : await getCvdBinance(symbol);
       const bookImb = isBybit ? await getBookImbBybit(symbol) : await getBookImbBinance(symbol);
       const pricePct = await getCurrentPriceChange(symbol, isBybit);
 
       currentScore = calculateScore(Math.abs(cvd), Math.abs(bookImb), pricePct);
 
-      if (currentScore >= 88) status = '🔥🔥🔥 Ancora Nucleare';
-      else if (currentScore >= 80) status = '🚀 Ancora Forte';
-      else if (currentScore >= 72) status = '📈 Ancora Buono';
-      else status = '⚠️ Indebolito';
+      if (currentScore >= 92) status = '🔥🔥🔥 Ultra';
+      else if (currentScore >= 85) status = '🚀 Super';
+      else if (currentScore >= 78) status = '📈 Big';
+      else status = '⚠️ Debole';
     } catch {}
 
-    const tierName = data.tier ? TIERS[data.tier]?.name || data.tier : 'Unknown';
-    controls.push(`• <b>${symbol}</b> (${tierName}) → <b>${status}</b> (Score ${currentScore.toFixed(0)})`);
+    const levelName = data.level ? LEVELS[data.level]?.name.split(' ')[1] : '??'; // Semplificato
+    controls.push(`• <b>${symbol}</b> (${levelName}) → ${status} (${currentScore.toFixed(0)})`);
   }
 
-  return controls.length ? `<b>🔄 Coppie in Monitoraggio</b>\n\n${controls.join('\n')}\n\n==============================\n\n` : '';
+  return controls.length ? `<b>🔄 Monitor</b>\n${controls.join('\n')}\n\n===\n\n` : '';
 }
 
 async function getCurrentPriceChange(symbol, isBybit) {
@@ -300,42 +293,41 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SEGNALE CON TIER
+//  ANALISI SEGNALE CON LIVELLI
 // ────────────────────────────────────────────────
-async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, tierKey) {
-  const tier = TIERS[tierKey];
+async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey) {
+  const level = LEVELS[levelKey];
   const base = symbol.replace(/USDT$|USDC$/, '');
   if (STABLE_BASES.includes(base)) return null;
 
-  const inConsolidation = await isInConsolidation(symbol, isBybit, tier.maxConsRange);
+  const inConsolidation = await isInConsolidation(symbol, isBybit, level.maxConsRange);
   if (!inConsolidation) return null;
 
   const cvdAbs = Math.abs(cvd);
   const bookAbs = Math.abs(bookImb);
 
-  if (cvdAbs < tier.minCvd || bookAbs < tier.minBook) return null;
-  if (Math.abs(pricePct) * 100 > tier.maxPricePct) return null;
+  if (cvdAbs < level.minCvd || bookAbs < level.minBook) return null;
+  if (Math.abs(pricePct) * 100 > level.maxPricePct) return null;
 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
-  if (score < tier.minScore) return null;
+  if (score < level.minScore) return null;
 
   const isLong = cvd > 0 && bookImb > 0;
-  const level = getLevel(score, isLong);
+  const levelObj = { emoji: level.emoji, text: isLong ? `${level.name.split(' ')[1]} LONG` : `${level.name.split(' ')[1]} SHORT` };
   const potential = getPotential(score);
 
   const extra = 
-    `   Potenzialità: <b>${potential}</b>\n` +
+    `   Pot: <b>${potential}</b>\n` +  // Semplificato
     `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-    `   Prezzo 24h: ${(pricePct * 100).toFixed(2)}% | Vol: $${(turnover / 1e6).toFixed(1)}M\n` +
-    `   Accumulo: <b>≤${tier.maxConsRange}%</b> — ${tier.name}`;
+    `   Vol: $${(turnover / 1e6).toFixed(1)}M`;  // Solo essenziali
 
-  const details = buildDetails(symbol, level, score, extra);
+  const details = buildDetails(symbol, levelObj, score, extra);
 
   return {
     score,
     details,
     isLong,
-    tier: tierKey
+    level: levelKey
   };
 }
 
@@ -343,7 +335,7 @@ async function analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isByb
 //  SCAN PER EXCHANGE
 // ────────────────────────────────────────────────
 async function scanExchange(isBybit) {
-  const signals = { NUCLEAR: [], STRONG: [], SOLID: [] };
+  const signals = { ULTRA: [], SUPER: [], BIG: [] };
   const exchangeName = isBybit ? 'Bybit' : 'Binance';
 
   try {
@@ -373,15 +365,14 @@ async function scanExchange(isBybit) {
       const cvd = isBybit ? await getCvdBybit(symbol) : await getCvdBinance(symbol);
       const bookImb = isBybit ? await getBookImbBybit(symbol) : await getBookImbBinance(symbol);
 
-      // Prova i tier dal più forte al più debole
-      for (const tierKey of ['NUCLEAR', 'STRONG', 'SOLID']) {
-        if (!checkCooldown(symbol, tierKey)) continue;
+      for (const levelKey of ['ULTRA', 'SUPER', 'BIG']) {
+        if (!checkCooldown(symbol, levelKey)) continue;
 
-        const signal = await analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, tierKey);
+        const signal = await analyzeSpotSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey);
         if (signal) {
-          signals[tierKey].push(signal);
-          updateCooldown(symbol, tierKey, signal.score);
-          break; // solo il tier più alto per simbolo
+          signals[levelKey].push(signal);
+          updateCooldown(symbol, levelKey, signal.score);
+          break;
         }
       }
     }
@@ -399,12 +390,12 @@ async function scanSpot() {
   const bybitSignals = await scanExchange(true);
   const binanceSignals = await scanExchange(false);
 
-  const finalSignals = { NUCLEAR: [], STRONG: [], SOLID: [] };
+  const finalSignals = { ULTRA: [], SUPER: [], BIG: [] };
 
-  for (const tier of Object.keys(TIERS)) {
-    const all = [...(bybitSignals[tier] || []), ...(binanceSignals[tier] || [])];
+  for (const level of Object.keys(LEVELS)) {
+    const all = [...(bybitSignals[level] || []), ...(binanceSignals[level] || [])];
     all.sort((a, b) => b.score - a.score);
-    finalSignals[tier] = all.slice(0, CONFIG.MAX_SIGNALS_PER_TIER);
+    finalSignals[level] = all.slice(0, CONFIG.MAX_SIGNALS_PER_LEVEL);
   }
 
   return finalSignals;
@@ -414,7 +405,7 @@ async function scanSpot() {
 //  MAIN
 // ────────────────────────────────────────────────
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL ACCUMULATION SCAN (3 TIER) avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN BUONI avviato...`);
   cleanupOldSignals();
 
   const controls = await getActiveControls();
@@ -422,27 +413,27 @@ async function mainScan() {
 
   let fullContent = controls;
 
-  if (spot.NUCLEAR.length > 0) {
-    fullContent += `☢️ <b>NUCLEAR EXPLOSION</b>\n\n${spot.NUCLEAR.map(s => s.details).join('\n\n')}\n\n`;
+  if (spot.ULTRA.length > 0) {
+    fullContent += `🚀🚀🚀 <b>ULTRA</b>\n\n${spot.ULTRA.map(s => s.details).join('\n\n')}\n\n`;
   }
-  if (spot.STRONG.length > 0) {
-    fullContent += `🚀 <b>STRONG EXPLOSION</b>\n\n${spot.STRONG.map(s => s.details).join('\n\n')}\n\n`;
+  if (spot.SUPER.length > 0) {
+    fullContent += `🚀🚀 <b>SUPER</b>\n\n${spot.SUPER.map(s => s.details).join('\n\n')}\n\n`;
   }
-  if (spot.SOLID.length > 0) {
-    fullContent += `📈 <b>GOOD ACCUMULATION SETUP</b>\n\n${spot.SOLID.map(s => s.details).join('\n\n')}\n\n`;
+  if (spot.BIG.length > 0) {
+    fullContent += `🚀 <b>BIG</b>\n\n${spot.BIG.map(s => s.details).join('\n\n')}\n\n`;
   }
 
   if (fullContent.trim().length > 50) {
-    await sendTelegram(fullContent, '📊 REVERSAL ACCUMULATION EXPLOSION SCAN - 3 TIER');
+    await sendTelegram(fullContent, '📊 REVERSAL EXPLOSION SCAN');
   } else {
-    console.log('❌ Nessun segnale valido in questo scan');
+    console.log('❌ Nessun segnale buono');
   }
 }
 
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 REVERSAL ACCUMULATION EXPLOSION SCANNER v6.0 (3 TIER) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 REVERSAL EXPLOSION SCANNER v9.0 (BUONI PER SCHEI) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
