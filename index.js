@@ -36,7 +36,7 @@ function cleanupOldSignals() {
   }
 }
 
-// ====================== CONFIGURAZIONE ======================
+// ====================== CONFIG ======================
 const CONFIG = {
   TURNOVER_MIN: 1800000,
   BOOK_DEPTH_LIMIT: 150,
@@ -60,9 +60,7 @@ const COOLDOWN_PER_LEVEL = {
 
 const STABLE_BASES = ['USDC','TUSD','FDUSD','BUSD','DAI','PYUSD','USDP','GUSD','FRAX','USDD','USDB','USDS','USDE','RLUSD','USDG','YUSD','USD1'];
 
-// ────────────────────────────────────────────────
-//  TELEGRAM + COOLDOWN
-// ────────────────────────────────────────────────
+// TELEGRAM
 async function sendTelegram(content, title) {
   const header = `<b>${title}</b>\n\n`;
   try {
@@ -95,9 +93,7 @@ function updateCooldown(key, level, score, isBybit, isPerps = false) {
   saveLastSignals();
 }
 
-// ────────────────────────────────────────────────
-//  SCORE + POTENZIALITÀ
-// ────────────────────────────────────────────────
+// SCORE + POTENZIALITÀ
 function getPotential(score) {
   if (score >= 94) return '🔥🔥🔥 NUCLEARE (25%+)';
   if (score >= 87) return '🔥🔥 ESTREMA (16-25%)';
@@ -111,9 +107,7 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
   return Math.min(100, Math.max(0, base + bookAbs * 120 - pricePenalty));
 }
 
-// ────────────────────────────────────────────────
-//  CONSOLIDATION + HELPERS
-// ────────────────────────────────────────────────
+// CONSOLIDATION
 async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot') {
   try {
     const interval = '15';
@@ -146,9 +140,7 @@ function buildDetails(symbol, level, score, extraLines, type) {
          extraLines;
 }
 
-// ────────────────────────────────────────────────
-//  MONITOR ATTIVI MIGLIORATO (con stato chiaro)
-// ────────────────────────────────────────────────
+// MONITOR ATTIVI
 async function getActiveControls() {
   const controls = [];
   const now = Date.now();
@@ -163,22 +155,15 @@ async function getActiveControls() {
     let currentScore = data.lastScore || 0;
 
     try {
-      const cvd = data.isBybit 
-        ? await getCvdBybit(symbolToUse, category) 
-        : await getCvdBinance(symbolToUse);
-      
-      const bookImb = data.isBybit 
-        ? await getBookImbBybit(symbolToUse, category) 
-        : await getBookImbBinance(symbolToUse);
-
+      const cvd = data.isBybit ? await getCvdBybit(symbolToUse, category) : await getCvdBinance(symbolToUse);
+      const bookImb = data.isBybit ? await getBookImbBybit(symbolToUse, category) : await getBookImbBinance(symbolToUse);
       const pricePct = await getCurrentPriceChange(symbolToUse, data.isBybit, category);
 
       currentScore = calculateScore(Math.abs(cvd), Math.abs(bookImb), pricePct);
 
-      if (currentScore >= 90)      status = 'Ancora ULTRA 🔥🔥🔥';
+      if (currentScore >= 90) status = 'Ancora ULTRA 🔥🔥🔥';
       else if (currentScore >= 83) status = 'Ancora SUPER 🚀🚀';
       else if (currentScore >= 76) status = 'Ancora BIG 🚀';
-      else                         status = 'Indebolito ⚠️';
     } catch (e) {}
 
     const levelName = data.level ? LEVELS[data.level]?.name.split(' ')[1] || '??' : '??';
@@ -200,9 +185,7 @@ async function getCurrentPriceChange(symbol, isBybit, category = 'spot') {
   } catch { return 0; }
 }
 
-// ────────────────────────────────────────────────
-//  CVD & BOOK
-// ────────────────────────────────────────────────
+// CVD & BOOK
 async function getCvdBybit(symbol, category = 'spot') {
   try {
     const res = await axios.get(`https://api.bybit.com/v5/market/recent-trade?category=${category}&symbol=${symbol}&limit=${CONFIG.CVD_LIMIT_BYBIT}`, { timeout: 9000 });
@@ -261,9 +244,7 @@ async function getBookImbBinance(symbol) {
   } catch { return 0; }
 }
 
-// ────────────────────────────────────────────────
-//  ANALISI SEGNALE
-// ────────────────────────────────────────────────
+// ANALISI SEGNALE
 async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
   const base = symbol.replace(/USDT|USDC/, '');
@@ -297,9 +278,7 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   return { score, details, isLong, level: levelKey };
 }
 
-// ────────────────────────────────────────────────
-//  SCAN SPOT + PERPS
-// ────────────────────────────────────────────────
+// SCAN
 async function scanSpotExchange(isBybit) {
   const signals = { ULTRA: [], SUPER: [], BIG: [] };
   try {
@@ -374,9 +353,7 @@ async function scanPerpsBybit() {
   return signals;
 }
 
-// ────────────────────────────────────────────────
-//  MAIN
-// ────────────────────────────────────────────────
+// MAIN
 async function mainScan() {
   console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN v10.4 avviato...`);
   cleanupOldSignals();
@@ -419,10 +396,8 @@ async function mainScan() {
   }
 }
 
-// ────────────────────────────────────────────────
-//  AVVIO
-// ────────────────────────────────────────────────
-console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.4 (Monitor Migliorato) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+// AVVIO
+console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.4 avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
