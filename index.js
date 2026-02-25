@@ -41,11 +41,12 @@ function cleanupOldSignals() {
 // ====================== CONFIGURAZIONE LIVELLI ======================
 const CONFIG = {
   TURNOVER_MIN: 2_000_000,
-  BOOK_DEPTH_LIMIT: 150,
-  CVD_LIMIT_BYBIT: 3000,
-  CVD_LIMIT_BINANCE: 1500,
+  BOOK_DEPTH_LIMIT: 500,  // Aumentato da 150 a 500 per una lettura più profonda e accurata dell'order book
+  CVD_LIMIT_BYBIT: 5000,  // Aumentato da 3000 a 5000 per un CVD più accurato su Bybit
+  CVD_LIMIT_BINANCE: 2000,  // Aumentato da 1500 a 2000 per un CVD più accurato su Binance
   SCAN_INTERVAL_MIN: 20,
   MAX_SIGNALS_PER_LEVEL: 4,
+  CONSOLIDATION_KLINES: 48,  // Aumentato da 32 a 48 (da ~8 ore a ~12 ore su 15m) per un check di consolidamento più profondo
 };
 
 const LEVELS = {
@@ -151,12 +152,12 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
 }
 
 // ────────────────────────────────────────────────
-//  CONSOLIDATION CHECK (range ultimi ~8 ore su 15m)
+//  CONSOLIDATION CHECK (range ultimi ~12 ore su 15m per maggiore profondità)
 // ────────────────────────────────────────────────
 async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot') {
   try {
     const interval = '15';
-    const limit = 32;
+    const limit = CONFIG.CONSOLIDATION_KLINES;
     let url;
 
     if (isBybit) {
@@ -168,7 +169,7 @@ async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot'
     const res = await axios.get(url, { timeout: 8000 });
     const klines = isBybit ? res.data.result.list : res.data;
 
-    if (klines.length < 16) return false;
+    if (klines.length < limit / 2) return false;  // Richiede almeno metà dei klines per accuratezza
 
     let high = -Infinity;
     let low = Infinity;
@@ -267,13 +268,13 @@ async function getCurrentPriceChange(symbol, isBybit, category = 'spot') {
 }
 
 // ────────────────────────────────────────────────
-//  CVD & BOOK HELPERS
+//  CVD & BOOK HELPERS (con limiti aumentati per maggiore accuratezza)
 // ────────────────────────────────────────────────
 async function getCvdBybit(symbol, category = 'spot') {
   try {
     const res = await axios.get(
       `https://api.bybit.com/v5/market/recent-trade?category=${category}&symbol=${symbol}&limit=${CONFIG.CVD_LIMIT_BYBIT}`,
-      { timeout: 9000 }
+      { timeout: 12000 }  // Timeout aumentato per gestire più dati
     );
     const trades = res.data.result.list || [];
     let delta = 0, total = 0;
@@ -293,7 +294,7 @@ async function getCvdBinance(symbol) {
   try {
     const res = await axios.get(
       `https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${CONFIG.CVD_LIMIT_BINANCE}`,
-      { timeout: 9000 }
+      { timeout: 12000 }  // Timeout aumentato per gestire più dati
     );
     const trades = res.data;
     let delta = 0, total = 0;
@@ -313,7 +314,7 @@ async function getBookImbBybit(symbol, category = 'spot') {
   try {
     const res = await axios.get(
       `https://api.bybit.com/v5/market/orderbook?category=${category}&symbol=${symbol}&limit=${CONFIG.BOOK_DEPTH_LIMIT}`,
-      { timeout: 8000 }
+      { timeout: 10000 }  // Timeout aumentato
     );
     const d = res.data.result;
     let bids = 0, asks = 0;
@@ -335,7 +336,7 @@ async function getBookImbBinance(symbol) {
   try {
     const res = await axios.get(
       `https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${CONFIG.BOOK_DEPTH_LIMIT}`,
-      { timeout: 8000 }
+      { timeout: 10000 }  // Timeout aumentato
     );
     const d = res.data;
     let bids = 0, asks = 0;
