@@ -110,25 +110,28 @@ async function sendTelegram(content, title) {
 }
 
 // ────────────────────────────────────────────────
-//  COOLDOWN PER LIVELLO
+//  COOLDOWN
 // ────────────────────────────────────────────────
-function checkCooldown(symbol, level) {
-  const last = lastSignals[symbol];
+function checkCooldown(key, level) {
+  const last = lastSignals[key];
   if (!last) return true;
   return Date.now() - last.timestamp > COOLDOWN_PER_LEVEL[level];
 }
 
-function updateCooldown(symbol, level, score) {
-  lastSignals[symbol] = { 
+function updateCooldown(key, level, score, isBybit, isPerps = false) {
+  lastSignals[key] = { 
     timestamp: Date.now(), 
     level: level,
-    lastScore: score 
+    lastScore: score,
+    isBybit: isBybit,
+    isPerps: isPerps,
+    baseSymbol: isPerps ? key.replace('-perps', '') : key
   };
   saveLastSignals();
 }
 
 // ────────────────────────────────────────────────
-//  POTENZIALITÀ
+//  POTENZIALITÀ + SCORE
 // ────────────────────────────────────────────────
 function getPotential(score) {
   if (score >= 95) return '🔥🔥🔥 NUCLEARE (25%+)';
@@ -152,12 +155,12 @@ async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot'
     const limit = 32;
     let url;
     if (isBybit) {
-      url = `https://api.bybit.com/v5/market/kline?category=${category}&symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      url = `https://api.bybit.com/v5/market/kline?category=\( {category}&symbol= \){symbol}&interval=\( {interval}&limit= \){limit}`;
     } else {
-      url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}m&limit=${limit}`;
+      url = `https://api.binance.com/api/v3/klines?symbol=\( {symbol}&interval= \){interval}m&limit=${limit}`;
     }
     const res = await axios.get(url, { timeout: 8000 });
-    const klines = isBybit ? res.data.result.list : res.data; // Adattato per Bybit list
+    const klines = isBybit ? res.data.result.list : res.data;
     if (klines.length < 16) return false;
 
     let high = -Infinity, low = Infinity;
@@ -179,31 +182,39 @@ async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot'
 // ────────────────────────────────────────────────
 function buildDetails(symbol, level, score, extraLines, type) {
   return (
-    `${level.emoji} <b>${symbol}</b> — ${level.text} (${type})\n` +
+    `\( {level.emoji} <b> \){symbol}</b> — \( {level.text} ( \){type})\n` +
     `   Score: <b>${score.toFixed(0)}</b>\n` +
     extraLines
   );
 }
 
 // ────────────────────────────────────────────────
-//  CONTROLLI COPPIE ATTIVE
+//  MONITOR ATTIVI (aggiorna in tempo reale)
 // ────────────────────────────────────────────────
 async function getActiveControls() {
   const controls = [];
   const now = Date.now();
 
-  for (const [symbol, data] of Object.entries(lastSignals)) {
+  for (const [key, data] of Object.entries(lastSignals)) {
     if (now - data.timestamp > 10 * 60 * 60 * 1000) continue;
+
+    const isBybit = data.isBybit;
+    const category = data.isPerps ? 'linear' : 'spot';
+    const symbolToUse = data.isPerps ? data.baseSymbol : key;
 
     let status = 'Monitor';
     let currentScore = data.lastScore || 0;
 
     try {
-      const isBybit = await getCurrentPriceChange(symbol, true).then(() => true).catch(() => false);
-      const category = data.type.includes('Perps') ? 'linear' : 'spot';
-      const cvd = isBybit ? await getCvdBybit(symbol, category) : await getCvdBinance(symbol);
-      const bookImb = isBybit ? await getBookImbBybit(symbol, category) : await getBookImbBinance(symbol);
-      const pricePct = await getCurrentPriceChange(symbol, isBybit, category);
+      const cvd = isBybit 
+        ? await getCvdBybit(symbolToUse, category) 
+        : await getCvdBinance(symbolToUse);
+      
+      const bookImb = isBybit 
+        ? await getBookImbBybit(symbolToUse, category) 
+        : await getBookImbBinance(symbolToUse);
+
+      const pricePct = await getCurrentPriceChange(symbolToUse, isBybit, category);
 
       currentScore = calculateScore(Math.abs(cvd), Math.abs(bookImb), pricePct);
 
@@ -211,19 +222,19 @@ async function getActiveControls() {
       else if (currentScore >= 85) status = '🚀 Super';
       else if (currentScore >= 78) status = '📈 Big';
       else status = '⚠️ Debole';
-    } catch {}
+    } catch (e) {}
 
-    const levelName = data.level ? LEVELS[data.level]?.name.split(' ')[1] : '??';
-    controls.push(`• <b>${symbol}</b> (${levelName}) → ${status} (${currentScore.toFixed(0)})`);
+    const levelName = data.level ? LEVELS[data.level]?.name.split(' ')[1] || '??' : '??';
+    controls.push(`• <b>\( {key}</b> ( \){levelName}) → \( {status} ( \){currentScore.toFixed(0)})`);
   }
 
-  return controls.length ? `<b>🔄 Monitor</b>\n${controls.join('\n')}\n\n===\n\n` : '';
+  return controls.length ? `<b>🔄 Monitor Attivi</b>\n${controls.join('\n')}\n\n===\n\n` : '';
 }
 
 async function getCurrentPriceChange(symbol, isBybit, category = 'spot') {
   try {
     if (isBybit) {
-      const res = await axios.get(`https://api.bybit.com/v5/market/tickers?category=${category}&symbol=${symbol}`, { timeout: 5000 });
+      const res = await axios.get(`https://api.bybit.com/v5/market/tickers?category=\( {category}&symbol= \){symbol}`, { timeout: 5000 });
       return parseFloat(res.data.result.list?.[0]?.price24hPcnt || 0) / 100;
     } else {
       const res = await axios.get(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`, { timeout: 5000 });
@@ -233,11 +244,11 @@ async function getCurrentPriceChange(symbol, isBybit, category = 'spot') {
 }
 
 // ────────────────────────────────────────────────
-//  CVD & BOOK HELPERS (adattati per category)
+//  CVD & BOOK HELPERS
 // ────────────────────────────────────────────────
 async function getCvdBybit(symbol, category = 'spot') {
   try {
-    const res = await axios.get(`https://api.bybit.com/v5/market/recent-trade?category=${category}&symbol=${symbol}&limit=${CONFIG.CVD_LIMIT_BYBIT}`, { timeout: 9000 });
+    const res = await axios.get(`https://api.bybit.com/v5/market/recent-trade?category=\( {category}&symbol= \){symbol}&limit=${CONFIG.CVD_LIMIT_BYBIT}`, { timeout: 9000 });
     const trades = res.data.result.list || [];
     let delta = 0, total = 0;
     for (const t of trades) {
@@ -251,7 +262,7 @@ async function getCvdBybit(symbol, category = 'spot') {
 
 async function getCvdBinance(symbol) {
   try {
-    const res = await axios.get(`https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${CONFIG.CVD_LIMIT_BINANCE}`, { timeout: 9000 });
+    const res = await axios.get(`https://api.binance.com/api/v3/trades?symbol=\( {symbol}&limit= \){CONFIG.CVD_LIMIT_BINANCE}`, { timeout: 9000 });
     const trades = res.data;
     let delta = 0, total = 0;
     for (const t of trades) {
@@ -265,7 +276,7 @@ async function getCvdBinance(symbol) {
 
 async function getBookImbBybit(symbol, category = 'spot') {
   try {
-    const res = await axios.get(`https://api.bybit.com/v5/market/orderbook?category=${category}&symbol=${symbol}&limit=${CONFIG.BOOK_DEPTH_LIMIT}`, { timeout: 8000 });
+    const res = await axios.get(`https://api.bybit.com/v5/market/orderbook?category=\( {category}&symbol= \){symbol}&limit=${CONFIG.BOOK_DEPTH_LIMIT}`, { timeout: 8000 });
     const d = res.data.result;
     let bids = 0, asks = 0;
     const len = Math.min(CONFIG.BOOK_DEPTH_LIMIT, d.b?.length || 0, d.a?.length || 0);
@@ -280,7 +291,7 @@ async function getBookImbBybit(symbol, category = 'spot') {
 
 async function getBookImbBinance(symbol) {
   try {
-    const res = await axios.get(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${CONFIG.BOOK_DEPTH_LIMIT}`, { timeout: 8000 });
+    const res = await axios.get(`https://api.binance.com/api/v3/depth?symbol=\( {symbol}&limit= \){CONFIG.BOOK_DEPTH_LIMIT}`, { timeout: 8000 });
     const d = res.data;
     let bids = 0, asks = 0;
     const len = Math.min(CONFIG.BOOK_DEPTH_LIMIT, d.bids.length, d.asks.length);
@@ -294,11 +305,11 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SEGNALE
+//  ANALISI SEGNALE - LOGICA ACCUMULO OTTIMIZZATA
 // ────────────────────────────────────────────────
 async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
-  const base = symbol.replace(/USDT$|USDC$/, '');
+  const base = symbol.replace(/USDT\( |USDC \)/, '');
   if (STABLE_BASES.includes(base)) return null;
 
   const inConsolidation = await isInConsolidation(symbol, isBybit, level.maxConsRange, category);
@@ -313,8 +324,16 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
   if (score < level.minScore) return null;
 
-  const isLong = cvd > 0 && bookImb > 0;
-  const levelObj = { emoji: level.emoji, text: isLong ? `${level.name.split(' ')[1]} LONG` : `${level.name.split(' ')[1]} SHORT` };
+  // === LOGICA OTTIMIZZATA ACCUMULO PER ESPLOSIONE LONG ===
+  // Book in BID → LONG anche se CVD negativo (buyers assorbono le vendite)
+  // Questo è esattamente il segnale di accumulo che volevi
+  const isLong = bookImb > 0;
+
+  const levelObj = { 
+    emoji: level.emoji, 
+    text: isLong ? `\( {level.name.split(' ')[1]} LONG` : ` \){level.name.split(' ')[1]} SHORT` 
+  };
+
   const potential = getPotential(score);
 
   const extra = 
@@ -334,7 +353,7 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
 }
 
 // ────────────────────────────────────────────────
-//  SCAN SPOT EXCHANGE
+//  SCAN SPOT + PERPS (stessi di prima)
 // ────────────────────────────────────────────────
 async function scanSpotExchange(isBybit) {
   const signals = { ULTRA: [], SUPER: [], BIG: [] };
@@ -373,7 +392,7 @@ async function scanSpotExchange(isBybit) {
         const signal = await analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey);
         if (signal) {
           signals[levelKey].push(signal);
-          updateCooldown(symbol, levelKey, signal.score);
+          updateCooldown(symbol, levelKey, signal.score, isBybit, false);
           break;
         }
       }
@@ -385,9 +404,6 @@ async function scanSpotExchange(isBybit) {
   return signals;
 }
 
-// ────────────────────────────────────────────────
-//  SCAN PERPS BYBIT
-// ────────────────────────────────────────────────
 async function scanPerpsBybit() {
   const signals = { ULTRA: [], SUPER: [], BIG: [] };
 
@@ -407,13 +423,13 @@ async function scanPerpsBybit() {
       const bookImb = await getBookImbBybit(symbol, 'linear');
 
       for (const levelKey of ['ULTRA', 'SUPER', 'BIG']) {
-        const perpsSymbol = `${symbol}-perps`; // Key unica per cooldown perps
-        if (!checkCooldown(perpsSymbol, levelKey)) continue;
+        const perpsKey = `${symbol}-perps`;
+        if (!checkCooldown(perpsKey, levelKey)) continue;
 
         const signal = await analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, true, levelKey, 'linear');
         if (signal) {
           signals[levelKey].push(signal);
-          updateCooldown(perpsSymbol, levelKey, signal.score);
+          updateCooldown(perpsKey, levelKey, signal.score, true, true);
           break;
         }
       }
@@ -434,11 +450,8 @@ async function mainScan() {
 
   const controls = await getActiveControls();
 
-  // Scan Spot
   const bybitSpot = await scanSpotExchange(true);
   const binanceSpot = await scanSpotExchange(false);
-
-  // Scan Perps Bybit
   const bybitPerps = await scanPerpsBybit();
 
   const finalSignals = { ULTRA: [], SUPER: [], BIG: [] };
@@ -480,7 +493,7 @@ async function mainScan() {
   }
 
   if (fullContent.trim().length > 50) {
-    await sendTelegram(fullContent, '📊 REVERSAL EXPLOSION SCAN + PERPS');
+    await sendTelegram(fullContent, '📊 REVERSAL EXPLOSION SCAN + PERPS (ACCUMULO OPTIMIZED)');
   } else {
     console.log('❌ Nessun segnale buono');
   }
@@ -489,7 +502,7 @@ async function mainScan() {
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.0 (CON PERPS BYBIT) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.2 (ACCUMULO OPTIMIZED) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
