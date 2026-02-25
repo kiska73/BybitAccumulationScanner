@@ -354,7 +354,7 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SEGNALE – direzione decisa dal BOOK
+//  ANALISI SEGNALE – direzione decisa dal BOOK (come lo interpreti tu)
 // ────────────────────────────────────────────────
 async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
@@ -373,12 +373,15 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
   if (score < level.minScore) return null;
 
-  // Direzione DECISA DAL BOOK
+  // ─── DIREZIONE: come lo interpreti tu ───
+  // bookImb > 0 (più bids) → LONG
+  // bookImb < 0 (più asks) → SHORT
   const isLong = bookImb > 0;
-  const levelObj = {
-    emoji: level.emoji,
-    text: isLong
-      ? `${level.name.split(' ')[1]} LONG`
+
+  const levelObj = { 
+    emoji: level.emoji, 
+    text: isLong 
+      ? `${level.name.split(' ')[1]} LONG` 
       : `${level.name.split(' ')[1]} SHORT`
   };
 
