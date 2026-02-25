@@ -244,7 +244,7 @@ async function getBookImbBinance(symbol) {
   } catch { return 0; }
 }
 
-// ANALISI SEGNALE
+// ANALISI SEGNALE - LOGICA ANTI-FALSO BREAKOUT
 async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
   const base = symbol.replace(/USDT|USDC/, '');
@@ -262,7 +262,8 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
   if (score < level.minScore) return null;
 
-  const isLong = bookImb > 0;
+  // ────── LOGICA MIGLIORATA ANTI-FALSO ──────
+  const isLong = (bookImb > 0.018) || (bookImb > 0 && cvd > -0.035);
 
   const levelObj = { 
     emoji: level.emoji, 
@@ -278,7 +279,7 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   return { score, details, isLong, level: levelKey };
 }
 
-// SCAN
+// SCAN SPOT + PERPS
 async function scanSpotExchange(isBybit) {
   const signals = { ULTRA: [], SUPER: [], BIG: [] };
   try {
@@ -355,7 +356,7 @@ async function scanPerpsBybit() {
 
 // MAIN
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN v10.4 avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN v10.5 avviato...`);
   cleanupOldSignals();
 
   const controls = await getActiveControls();
@@ -390,14 +391,14 @@ async function mainScan() {
   }
 
   if (fullContent.trim().length > 50) {
-    await sendTelegram(fullContent, '📊 REVERSAL EXPLOSION SCAN + PERPS');
+    await sendTelegram(fullContent, '📊 REVERSAL EXPLOSION SCAN + PERPS v10.5');
   } else {
     console.log('❌ Nessun segnale buono in questo scan');
   }
 }
 
 // AVVIO
-console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.4 avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.5 (Anti-Falso Breakout) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
