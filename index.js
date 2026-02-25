@@ -38,12 +38,12 @@ function cleanupOldSignals() {
 
 // ====================== CONFIGURAZIONE ======================
 const CONFIG = {
-  TURNOVER_MIN: 1800000,           // leggermente abbassato
+  TURNOVER_MIN: 1800000,
   BOOK_DEPTH_LIMIT: 150,
   CVD_LIMIT_BYBIT: 3000,
   CVD_LIMIT_BINANCE: 1500,
   SCAN_INTERVAL_MIN: 20,
-  MAX_SIGNALS_PER_LEVEL: 5,        // un po' più segnali
+  MAX_SIGNALS_PER_LEVEL: 5,
 };
 
 const LEVELS = {
@@ -112,7 +112,7 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
 }
 
 // ────────────────────────────────────────────────
-//  CONSOLIDATION + HELPERS (corretti)
+//  CONSOLIDATION + HELPERS
 // ────────────────────────────────────────────────
 async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot') {
   try {
@@ -123,7 +123,7 @@ async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot'
       : `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}m&limit=${limit}`;
 
     const res = await axios.get(url, { timeout: 8000 });
-    const klines = isBybit ? res.data.result : res.data;   // Bybit usa .result (array diretto)
+    const klines = isBybit ? res.data.result : res.data;
     if (klines.length < 16) return false;
 
     let high = -Infinity, low = Infinity;
@@ -140,15 +140,15 @@ async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot'
   }
 }
 
-// ────────────────────────────────────────────────
-//  BUILD DETAILS + MONITOR
-// ────────────────────────────────────────────────
 function buildDetails(symbol, level, score, extraLines, type) {
   return `${level.emoji} <b>${symbol}</b> — ${level.text} (${type})\n` +
          `   Score: <b>${score.toFixed(0)}</b>\n` +
          extraLines;
 }
 
+// ────────────────────────────────────────────────
+//  MONITOR ATTIVI MIGLIORATO (con stato chiaro)
+// ────────────────────────────────────────────────
 async function getActiveControls() {
   const controls = [];
   const now = Date.now();
@@ -159,25 +159,27 @@ async function getActiveControls() {
     const symbolToUse = data.isPerps ? data.baseSymbol : key;
     const category = data.isPerps ? 'linear' : 'spot';
 
-    let status = 'Monitor';
+    let status = 'Indebolito ⚠️';
     let currentScore = data.lastScore || 0;
 
     try {
       const cvd = data.isBybit 
         ? await getCvdBybit(symbolToUse, category) 
         : await getCvdBinance(symbolToUse);
+      
       const bookImb = data.isBybit 
         ? await getBookImbBybit(symbolToUse, category) 
         : await getBookImbBinance(symbolToUse);
+
       const pricePct = await getCurrentPriceChange(symbolToUse, data.isBybit, category);
 
       currentScore = calculateScore(Math.abs(cvd), Math.abs(bookImb), pricePct);
 
-      if (currentScore >= 90) status = '🔥🔥🔥 Ultra';
-      else if (currentScore >= 83) status = '🚀 Super';
-      else if (currentScore >= 76) status = '📈 Big';
-      else status = '⚠️ Debole';
-    } catch {}
+      if (currentScore >= 90)      status = 'Ancora ULTRA 🔥🔥🔥';
+      else if (currentScore >= 83) status = 'Ancora SUPER 🚀🚀';
+      else if (currentScore >= 76) status = 'Ancora BIG 🚀';
+      else                         status = 'Indebolito ⚠️';
+    } catch (e) {}
 
     const levelName = data.level ? LEVELS[data.level]?.name.split(' ')[1] || '??' : '??';
     controls.push(`• <b>${key}</b> (${levelName}) → ${status} (${currentScore.toFixed(0)})`);
@@ -198,7 +200,9 @@ async function getCurrentPriceChange(symbol, isBybit, category = 'spot') {
   } catch { return 0; }
 }
 
-// CVD & BOOK (corretti)
+// ────────────────────────────────────────────────
+//  CVD & BOOK
+// ────────────────────────────────────────────────
 async function getCvdBybit(symbol, category = 'spot') {
   try {
     const res = await axios.get(`https://api.bybit.com/v5/market/recent-trade?category=${category}&symbol=${symbol}&limit=${CONFIG.CVD_LIMIT_BYBIT}`, { timeout: 9000 });
@@ -258,7 +262,7 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SEGNALE (con accumulo ottimizzato)
+//  ANALISI SEGNALE
 // ────────────────────────────────────────────────
 async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
@@ -277,7 +281,7 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
   if (score < level.minScore) return null;
 
-  const isLong = bookImb > 0;   // ← accumulo reale (book carico sui bid)
+  const isLong = bookImb > 0;
 
   const levelObj = { 
     emoji: level.emoji, 
@@ -374,7 +378,7 @@ async function scanPerpsBybit() {
 //  MAIN
 // ────────────────────────────────────────────────
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN v10.3 avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN v10.4 avviato...`);
   cleanupOldSignals();
 
   const controls = await getActiveControls();
@@ -418,7 +422,7 @@ async function mainScan() {
 // ────────────────────────────────────────────────
 //  AVVIO
 // ────────────────────────────────────────────────
-console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.3 (FIX + PERPS) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 REVERSAL EXPLOSION SCANNER v10.4 (Monitor Migliorato) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 
