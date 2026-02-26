@@ -41,7 +41,8 @@ function cleanupOldSignals() {
 // ====================== CONFIGURAZIONE LIVELLI ======================
 const CONFIG = {
   TURNOVER_MIN: 2_000_000,
-  BOOK_DEPTH_LIMIT: 500,
+  BOOK_DEPTH_LIMIT: 500,                    // ← Mantenuto profondo come richiesto
+  AGGREGATION_MULTIPLIER: 10,               // ← Nuovo: fattore per "tirare via uno 0" (tick_size * 10)
   CVD_LIMIT_BYBIT: 5000,
   CVD_LIMIT_BINANCE: 2000,
   SCAN_INTERVAL_MIN: 20,
@@ -54,7 +55,7 @@ const LEVELS = {
     name: '🚀🚀🚀 ULTRA EXPLOSION',
     minScore: 92,
     minCvd: 0.135,
-    minBook: 0.058,
+    minBook: 0.058,        // ← Threshold originali, ma con book aggregato saranno più puliti
     maxConsRange: 3.2,
     maxPricePct: 1.2,
     emoji: '🚀🚀🚀'
@@ -152,6 +153,62 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
 }
 
 // ────────────────────────────────────────────────
+//  REGIME DI MERCATO BTC (1h + 24h) - Mantenuto per filtrare long/short in trend
+// ────────────────────────────────────────────────
+async function getBtcRegime(isBybit) {
+  try {
+    const symbol = 'BTCUSDT';
+    let pct1h = 0, pct24h = 0;
+
+    if (isBybit) {
+      // 24h
+      const res24 = await axios.get(
+        `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`,
+        { timeout: 4000 }
+      );
+      pct24h = parseFloat(res24.data.result.list?.[0]?.price24hPcnt || 0);
+
+      // 1h
+      const res1h = await axios.get(
+        `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=60&limit=2`,
+        { timeout: 4000 }
+      );
+      const klines = res1h.data.result.list || [];
+      if (klines.length >= 2) {
+        const closeNow = parseFloat(klines[0][4]);
+        const closePrev = parseFloat(klines[1][4]);
+        pct1h = (closeNow - closePrev) / closePrev * 100;
+      }
+    } else {
+      // Binance 24h
+      const res24 = await axios.get(
+        `https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`,
+        { timeout: 4000 }
+      );
+      pct24h = parseFloat(res24.data.priceChangePercent);
+
+      // Binance 1h
+      const res1h = await axios.get(
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=2`,
+        { timeout: 4000 }
+      );
+      const klines = res1h.data;
+      if (klines.length >= 2) {
+        const closeNow = parseFloat(klines[1][4]);  // klines[0] is previous, klines[1] is current? Wait, Binance klines are oldest first
+        const closePrev = parseFloat(klines[0][4]);
+        pct1h = (closeNow - closePrev) / closePrev * 100;
+      }
+    }
+
+    if (pct1h < -1.0 || pct24h < -2.0) return 'bearish';
+    if (pct1h > 1.0 || pct24h > 2.0) return 'bullish';
+    return 'neutral';
+  } catch {
+    return 'neutral';
+  }
+}
+
+// ────────────────────────────────────────────────
 //  CONSOLIDATION CHECK
 // ────────────────────────────────────────────────
 async function isInConsolidation(symbol, isBybit, maxRangePct, category = 'spot') {
@@ -229,10 +286,10 @@ async function getActiveControls() {
 
       currentScore = calculateScore(Math.abs(cvd), Math.abs(bookImb), pricePct);
 
-      if      (currentScore >= 92) status = '🔥🔥🔥 Ultra';
+      if (currentScore >= 92) status = '🔥🔥🔥 Ultra';
       else if (currentScore >= 85) status = '🚀 Super';
       else if (currentScore >= 78) status = '📈 Big';
-      else                         status = '⚠️ Debole';
+      else status = '⚠️ Debole';
     } catch {}
 
     const levelName = data.level ? LEVELS[data.level]?.name.split(' ')[1] || '??' : '??';
@@ -252,7 +309,7 @@ async function getCurrentPriceChange(symbol, isBybit, category = 'spot') {
         `https://api.bybit.com/v5/market/tickers?category=${category}&symbol=${symbol}`,
         { timeout: 5000 }
       );
-      return parseFloat(res.data.result.list?.[0]?.price24hPcnt || 0) / 100;
+      return parseFloat(res.data.result.list?.[0]?.price24hPcnt || 0);
     } else {
       const res = await axios.get(
         `https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`,
@@ -266,7 +323,7 @@ async function getCurrentPriceChange(symbol, isBybit, category = 'spot') {
 }
 
 // ────────────────────────────────────────────────
-//  CVD & BOOK HELPERS
+//  CVD & BOOK HELPERS - BOOK AGGREGATO
 // ────────────────────────────────────────────────
 async function getCvdBybit(symbol, category = 'spot') {
   try {
@@ -308,19 +365,72 @@ async function getCvdBinance(symbol) {
   }
 }
 
+async function getTickSizeBybit(symbol, category = 'spot') {
+  try {
+    const res = await axios.get(
+      `https://api.bybit.com/v5/market/instruments-info?category=${category}&symbol=${symbol}`,
+      { timeout: 5000 }
+    );
+    const info = res.data.result.list?.[0]?.priceFilter;
+    return parseFloat(info?.tickSize || '0.0001');  // default se errore
+  } catch {
+    return 0.0001;
+  }
+}
+
+async function getTickSizeBinance(symbol) {
+  try {
+    const res = await axios.get(
+      `https://api.binance.com/api/v3/exchangeInfo?symbol=${symbol}`,
+      { timeout: 5000 }
+    );
+    const filters = res.data.symbols?.[0]?.filters || [];
+    const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
+    return parseFloat(priceFilter?.tickSize || '0.0001');
+  } catch {
+    return 0.0001;
+  }
+}
+
 async function getBookImbBybit(symbol, category = 'spot') {
   try {
+    const tickSize = await getTickSizeBybit(symbol, category);
+    const aggStep = tickSize * CONFIG.AGGREGATION_MULTIPLIER;  // "tirare via uno 0"
+
     const res = await axios.get(
       `https://api.bybit.com/v5/market/orderbook?category=${category}&symbol=${symbol}&limit=${CONFIG.BOOK_DEPTH_LIMIT}`,
       { timeout: 10000 }
     );
     const d = res.data.result;
+    const bidMap = new Map();
+    const askMap = new Map();
+
+    // Aggrega bids
+    for (const [priceStr, qtyStr] of d.b || []) {
+      const price = parseFloat(priceStr);
+      const rounded = Math.floor(price / aggStep) * aggStep;  // round down per bids?
+      const qty = parseFloat(qtyStr);
+      bidMap.set(rounded, (bidMap.get(rounded) || 0) + qty);
+    }
+
+    // Aggrega asks
+    for (const [priceStr, qtyStr] of d.a || []) {
+      const price = parseFloat(priceStr);
+      const rounded = Math.ceil(price / aggStep) * aggStep;  // round up per asks?
+      const qty = parseFloat(qtyStr);
+      askMap.set(rounded, (askMap.get(rounded) || 0) + qty);
+    }
+
+    // Sort e prendi top levels (dopo aggregazione, ma usiamo tutti poiché depth è deep)
+    const sortedBids = Array.from(bidMap.entries()).sort((a, b) => b[0] - a[0]);  // descending price
+    const sortedAsks = Array.from(askMap.entries()).sort((a, b) => a[0] - b[0]);  // ascending price
+
     let bids = 0, asks = 0;
-    const len = Math.min(CONFIG.BOOK_DEPTH_LIMIT, d.b?.length || 0, d.a?.length || 0);
+    const len = Math.min(CONFIG.BOOK_DEPTH_LIMIT, sortedBids.length, sortedAsks.length);  // limita se necessario
 
     for (let i = 0; i < len; i++) {
-      bids += parseFloat(d.b[i][1]);
-      asks += parseFloat(d.a[i][1]);
+      bids += sortedBids[i]?.[1] || 0;
+      asks += sortedAsks[i]?.[1] || 0;
     }
 
     const total = bids + asks;
@@ -332,17 +442,42 @@ async function getBookImbBybit(symbol, category = 'spot') {
 
 async function getBookImbBinance(symbol) {
   try {
+    const tickSize = await getTickSizeBinance(symbol);
+    const aggStep = tickSize * CONFIG.AGGREGATION_MULTIPLIER;
+
     const res = await axios.get(
       `https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${CONFIG.BOOK_DEPTH_LIMIT}`,
       { timeout: 10000 }
     );
     const d = res.data;
+    const bidMap = new Map();
+    const askMap = new Map();
+
+    // Aggrega bids
+    for (const [priceStr, qtyStr] of d.bids) {
+      const price = parseFloat(priceStr);
+      const rounded = Math.floor(price / aggStep) * aggStep;
+      const qty = parseFloat(qtyStr);
+      bidMap.set(rounded, (bidMap.get(rounded) || 0) + qty);
+    }
+
+    // Aggrega asks
+    for (const [priceStr, qtyStr] of d.asks) {
+      const price = parseFloat(priceStr);
+      const rounded = Math.ceil(price / aggStep) * aggStep;
+      const qty = parseFloat(qtyStr);
+      askMap.set(rounded, (askMap.get(rounded) || 0) + qty);
+    }
+
+    const sortedBids = Array.from(bidMap.entries()).sort((a, b) => b[0] - a[0]);
+    const sortedAsks = Array.from(askMap.entries()).sort((a, b) => a[0] - b[0]);
+
     let bids = 0, asks = 0;
-    const len = Math.min(CONFIG.BOOK_DEPTH_LIMIT, d.bids.length, d.asks.length);
+    const len = Math.min(CONFIG.BOOK_DEPTH_LIMIT, sortedBids.length, sortedAsks.length);
 
     for (let i = 0; i < len; i++) {
-      bids += parseFloat(d.bids[i][1]);
-      asks += parseFloat(d.asks[i][1]);
+      bids += sortedBids[i]?.[1] || 0;
+      asks += sortedAsks[i]?.[1] || 0;
     }
 
     const total = bids + asks;
@@ -353,7 +488,7 @@ async function getBookImbBinance(symbol) {
 }
 
 // ────────────────────────────────────────────────
-//  ANALISI SEGNALE – SOLO CAMBIO QUI (CVD DIREZIONALE)
+//  ANALISI SEGNALE
 // ────────────────────────────────────────────────
 async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
@@ -363,11 +498,11 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   const inConsolidation = await isInConsolidation(symbol, isBybit, level.maxConsRange, category);
   if (!inConsolidation) return null;
 
-  // ==================== SOLO QUESTA PARTE È CAMBIATA ====================
+  const regime = await getBtcRegime(isBybit);
+
   const isLong = bookImb > 0;
   const cvdMatchesDirection = isLong ? (cvd > 0) : (cvd < 0);
   if (!cvdMatchesDirection) return null;
-  // =====================================================================
 
   const cvdAbs  = Math.abs(cvd);
   const bookAbs = Math.abs(bookImb);
@@ -377,6 +512,14 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
 
   const score = calculateScore(cvdAbs, bookAbs, pricePct);
   if (score < level.minScore) return null;
+
+  // Regime filter per evitare long in bear / short in bull
+  if (isLong && regime === 'bearish') {
+    if (cvdAbs < level.minCvd * 1.35 || score < level.minScore + 9) return null;
+  }
+  if (!isLong && regime === 'bullish') {
+    if (cvdAbs < level.minCvd * 1.35 || score < level.minScore + 9) return null;
+  }
 
   const levelObj = { 
     emoji: level.emoji, 
@@ -390,7 +533,8 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
   const extra = 
     `   Pot: <b>${potential}</b>\n` +
     `   CVD: ${(cvd * 100).toFixed(1)}% | Book: ${(bookImb * 100).toFixed(1)}%\n` +
-    `   Vol: $${(turnover / 1e6).toFixed(1)}M`;
+    `   Vol: $${(turnover / 1e6).toFixed(1)}M` +
+    (regime !== 'neutral' ? `\n   Regime: ${regime.toUpperCase()}` : '');
 
   const type = category === 'linear' ? 'Perps Bybit' : (isBybit ? 'Spot Bybit' : 'Spot Binance');
   const details = buildDetails(symbol, levelObj, score, extra, type);
@@ -404,7 +548,7 @@ async function analyzeSignal(symbol, cvd, bookImb, pricePct, turnover, isBybit, 
 }
 
 // ────────────────────────────────────────────────
-//  SCAN SPOT / PERPS (tutto il resto identico)
+//  SCAN SPOT / PERPS
 // ────────────────────────────────────────────────
 async function scanSpotExchange(isBybit) {
   const signals = { ULTRA: [], SUPER: [], BIG: [] };
@@ -425,7 +569,7 @@ async function scanSpotExchange(isBybit) {
       if (!symbol.endsWith('USDT')) continue;
 
       const pricePct = isBybit
-        ? parseFloat(t.price24hPcnt || 0) / 100
+        ? parseFloat(t.price24hPcnt || 0)
         : parseFloat(t.priceChangePercent) / 100;
 
       const turnover = isBybit
@@ -466,7 +610,7 @@ async function scanPerpsBybit() {
       const symbol = t.symbol;
       if (!symbol.endsWith('USDT')) continue;
 
-      const pricePct = parseFloat(t.price24hPcnt || 0) / 100;
+      const pricePct = parseFloat(t.price24hPcnt || 0);
       const turnover = parseFloat(t.turnover24h || 0);
       if (turnover < CONFIG.TURNOVER_MIN) continue;
 
@@ -496,7 +640,7 @@ async function scanPerpsBybit() {
 //  MAIN SCAN
 // ────────────────────────────────────────────────
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN v10.2 (CVD DIREZIONALE) avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL SCAN v10.2 (CVD DIREZIONALE + BOOK AGGREGATO) avviato...`);
   cleanupOldSignals();
 
   const controls = await getActiveControls();
@@ -555,7 +699,7 @@ async function mainScan() {
 //  AVVIO
 // ────────────────────────────────────────────────
 console.log(
-  `🚀 REVERSAL EXPLOSION SCANNER v10.2 (CVD >0 LONG / <0 SHORT) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`
+  `🚀 REVERSAL EXPLOSION SCANNER v10.2 (CVD >0 LONG / <0 SHORT + BOOK AGGREGATO x10) avviato - ogni ${CONFIG.SCAN_INTERVAL_MIN} min`
 );
 
 mainScan().catch(err => console.error('Errore avvio:', err.message));
