@@ -1,8 +1,8 @@
 // ===============================================
-//  REVERSAL EXPLOSION SCANNER v11.2 - TRUE DIVERGENCE MODE
+//  REVERSAL EXPLOSION SCANNER v11.3 - CVD DIRECTION LOCK
 //  🧨 Cacciatore di Breakout Rari (ULTRA/SUPER/BIG)
 //  ⚡ Generatore di Opportunità Frequenti Serie (PRE-EXPLOSION)
-//  Fix definitivo: OI delta SIGNED + vera divergenza prezzo/OI
+//  Fix: CVD direction lock (coerenza totale con isLong)
 // ===============================================
 
 const axios = require('axios');
@@ -18,34 +18,23 @@ let lastSignals = {};
 let lastPreSignals = {};
 
 if (fs.existsSync(LAST_FILE)) {
-  try { lastSignals = JSON.parse(fs.readFileSync(LAST_FILE, 'utf8')); } catch (err) {}
+  try { lastSignals = JSON.parse(fs.readFileSync(LAST_FILE, 'utf8')); } catch {}
 }
 if (fs.existsSync(PRE_FILE)) {
-  try { lastPreSignals = JSON.parse(fs.readFileSync(PRE_FILE, 'utf8')); } catch (err) {}
+  try { lastPreSignals = JSON.parse(fs.readFileSync(PRE_FILE, 'utf8')); } catch {}
 }
 
-function saveLastSignals() {
-  fs.writeFileSync(LAST_FILE, JSON.stringify(lastSignals, null, 2));
-}
-
-function saveLastPreSignals() {
-  fs.writeFileSync(PRE_FILE, JSON.stringify(lastPreSignals, null, 2));
-}
+function saveLastSignals() { fs.writeFileSync(LAST_FILE, JSON.stringify(lastSignals, null, 2)); }
+function saveLastPreSignals() { fs.writeFileSync(PRE_FILE, JSON.stringify(lastPreSignals, null, 2)); }
 
 function cleanupOldSignals() {
   const now = Date.now();
   const cutoff = now - 24 * 60 * 60 * 1000;
   let cleaned = 0;
   for (const key of Object.keys(lastSignals)) {
-    if (lastSignals[key].timestamp < cutoff) {
-      delete lastSignals[key];
-      cleaned++;
-    }
+    if (lastSignals[key].timestamp < cutoff) { delete lastSignals[key]; cleaned++; }
   }
-  if (cleaned > 0) {
-    saveLastSignals();
-    console.log(`🧹 Puliti ${cleaned} segnali vecchi`);
-  }
+  if (cleaned > 0) { saveLastSignals(); console.log(`🧹 Puliti ${cleaned} segnali vecchi`); }
 }
 
 function cleanupOldPreSignals() {
@@ -53,15 +42,9 @@ function cleanupOldPreSignals() {
   const cutoff = now - 24 * 60 * 60 * 1000;
   let cleaned = 0;
   for (const key of Object.keys(lastPreSignals)) {
-    if (lastPreSignals[key].timestamp < cutoff) {
-      delete lastPreSignals[key];
-      cleaned++;
-    }
+    if (lastPreSignals[key].timestamp < cutoff) { delete lastPreSignals[key]; cleaned++; }
   }
-  if (cleaned > 0) {
-    saveLastPreSignals();
-    console.log(`🧹 Puliti ${cleaned} PRE-segnali vecchi`);
-  }
+  if (cleaned > 0) { saveLastPreSignals(); console.log(`🧹 Puliti ${cleaned} PRE-segnali vecchi`); }
 }
 
 // ====================== CONFIG ======================
@@ -78,7 +61,7 @@ const CONFIG = {
   CANDLE_INTERVAL: '15',
   CANDLE_LIMIT: 3,
 
-  // FULL EXPLOSION
+  // FULL
   CONFIRM_MIN_CVD_PERPS: 0.125,
   CONFIRM_MIN_OI_DELTA_PCT: 0.55,
   MIN_CANDLE_BODY_RATIO: 0.62,
@@ -87,7 +70,7 @@ const CONFIG = {
   MIN_FUNDING_SHORT: -0.0001,
   MIN_ATR_PCT: 0.65,
 
-  // PRE-EXPLOSION
+  // PRE
   CONSOLIDATION_KLINES: 32,
   CONFIRM_MIN_CVD_PERPS_PRE: 0.09,
   CONFIRM_MIN_OI_DELTA_PCT_PRE: 0.32,
@@ -104,17 +87,12 @@ const LEVELS = {
   BIG:   { name: '🚀 BIG EXPLOSION',    minScore: 80, minCvd: 0.095, minBook: 0.035, maxConsRange: 6.0, maxPricePct: 2.3, emoji: '🚀' }
 };
 
-const COOLDOWN_PER_LEVEL = {
-  ULTRA: 7 * 60 * 60 * 1000,
-  SUPER: 5 * 60 * 60 * 1000,
-  BIG:   3 * 60 * 60 * 1000,
-};
+const COOLDOWN_PER_LEVEL = { ULTRA: 7*60*60*1000, SUPER: 5*60*60*1000, BIG: 3*60*60*1000 };
 
 const STABLE_BASES = ['USDC','TUSD','FDUSD','BUSD','DAI','PYUSD','USDP','GUSD','FRAX','USDD','USDB','USDS','USDE','RLUSD','USDG','YUSD','USD1'];
 
-// ====================== TELEGRAM ======================
+// ====================== TELEGRAM & COOLDOWN ======================
 async function sendTelegram(content, title) {
-  if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN.includes('INSERISCI')) return;
   try {
     await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       chat_id: TELEGRAM_CHAT_ID,
@@ -122,43 +100,27 @@ async function sendTelegram(content, title) {
       parse_mode: 'HTML',
       disable_web_page_preview: false,
     });
-    console.log(`✅ Telegram inviato: ${title}`);
-  } catch (err) {
-    console.error('Errore Telegram:', err.message);
-  }
+    console.log(`✅ Telegram: ${title}`);
+  } catch (e) { console.error('Telegram err:', e.message); }
 }
 
 function checkCooldown(key, level) {
   const last = lastSignals[key];
-  if (!last) return true;
-  return Date.now() - last.timestamp > COOLDOWN_PER_LEVEL[level];
+  return !last || Date.now() - last.timestamp > COOLDOWN_PER_LEVEL[level];
 }
 
 function updateCooldown(key, level, score, isBybit, isPerps = false) {
-  lastSignals[key] = {
-    timestamp: Date.now(),
-    level,
-    lastScore: score,
-    isBybit,
-    isPerps,
-  };
+  lastSignals[key] = { timestamp: Date.now(), level, lastScore: score, isBybit, isPerps };
   saveLastSignals();
 }
 
 function checkCooldownPre(key) {
   const last = lastPreSignals[key];
-  if (!last) return true;
-  return Date.now() - last.timestamp > 4 * 60 * 60 * 1000;
+  return !last || Date.now() - last.timestamp > 4*60*60*1000;
 }
 
 function updateCooldownPre(key, score, isBybit, isPerps = false) {
-  lastPreSignals[key] = {
-    timestamp: Date.now(),
-    level: 'PRE',
-    lastScore: score,
-    isBybit,
-    isPerps,
-  };
+  lastPreSignals[key] = { timestamp: Date.now(), level: 'PRE', lastScore: score, isBybit, isPerps };
   saveLastPreSignals();
 }
 
@@ -176,7 +138,7 @@ function calculateScore(cvdAbs, bookAbs, pricePct) {
   return Math.min(100, Math.max(0, base + bookAbs * 120 - pricePenalty));
 }
 
-// ====================== BYBIT PERPS HELPERS ======================
+// ====================== HELPERS ======================
 async function getCvdBybit(symbol, category = 'linear') {
   try {
     const res = await axios.get(`https://api.bybit.com/v5/market/recent-trade?category=${category}&symbol=${symbol}&limit=${CONFIG.CVD_LIMIT_BYBIT}`, { timeout: 8000 });
@@ -199,7 +161,7 @@ async function getOIDeltaBybit(symbol) {
     const oiNow = parseFloat(list[0].openInterest);
     const oiPrev = parseFloat(list[1].openInterest);
     const deltaPct = oiPrev > 0 ? (oiNow - oiPrev) / oiPrev * 100 : 0;
-    return { deltaPct }; // SIGNED
+    return { deltaPct };
   } catch { return { deltaPct: 0 }; }
 }
 
@@ -324,7 +286,7 @@ async function getPerpsConfirmationData(baseSymbol, expectedLong) {
 
   return {
     cvd,
-    oiDelta: oiData.deltaPct,        // signed
+    oiDelta: oiData.deltaPct,
     absOiDelta: Math.abs(oiData.deltaPct),
     priceOIDiv,
     candle,
@@ -335,7 +297,7 @@ async function getPerpsConfirmationData(baseSymbol, expectedLong) {
   };
 }
 
-// ====================== ANALISI ======================
+// ====================== ANALISI (con CVD direction lock) ======================
 async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
   const base = symbol.replace(/USDT|USDC/, '');
@@ -362,8 +324,11 @@ async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, i
 
   const data = await getPerpsConfirmationData(base, isLong);
 
+  // DIRECTION LOCK per CVD (nuovo fix)
+  const cvdDirectionOK = (isLong && data.cvd > 0) || (!isLong && data.cvd < 0);
+
   // FULL
-  const fullOK = 
+  const fullOK = cvdDirectionOK &&
     Math.abs(data.cvd) >= CONFIG.CONFIRM_MIN_CVD_PERPS &&
     data.absOiDelta >= CONFIG.CONFIRM_MIN_OI_DELTA_PCT &&
     data.candle >= CONFIG.MIN_CANDLE_BODY_RATIO &&
@@ -398,7 +363,7 @@ async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, i
   }
 
   // PRE
-  const preOK = 
+  const preOK = cvdDirectionOK &&
     Math.abs(data.cvd) >= CONFIG.CONFIRM_MIN_CVD_PERPS_PRE &&
     data.absOiDelta >= CONFIG.CONFIRM_MIN_OI_DELTA_PCT_PRE &&
     data.candle >= CONFIG.MIN_CANDLE_BODY_RATIO_PRE &&
@@ -433,7 +398,7 @@ async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, i
   return null;
 }
 
-// ====================== ALTRE FUNZIONI ======================
+// ====================== ALTRE FUNZIONI (invariate) ======================
 async function getBtcRegime(isBybit) {
   try {
     const symbol = 'BTCUSDT';
@@ -625,7 +590,7 @@ async function scanPerpsBybit() {
 
 // ====================== MAIN ======================
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL EXPLOSION v11.2 - TRUE DIVERGENCE avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL EXPLOSION v11.3 - CVD DIRECTION LOCK avviato...`);
   cleanupOldSignals();
   cleanupOldPreSignals();
 
@@ -668,13 +633,13 @@ async function mainScan() {
   }
 
   if (content.trim().length > 30) {
-    await sendTelegram(content, '📊 EXPLOSION SCAN v11.2 - TRUE DIVERGENCE');
+    await sendTelegram(content, '📊 EXPLOSION SCAN v11.3 - CVD DIRECTION LOCK');
   } else {
     console.log('❌ Nessun segnale');
   }
 }
 
 // ====================== AVVIO ======================
-console.log(`🚀 REVERSAL EXPLOSION SCANNER v11.2 - TRUE DIVERGENCE avviato ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 REVERSAL EXPLOSION SCANNER v11.3 - CVD DIRECTION LOCK avviato ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 setInterval(() => mainScan().catch(err => console.error('Errore scan:', err.message)), CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
