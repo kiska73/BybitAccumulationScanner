@@ -1,9 +1,10 @@
 // ===============================================
-//  REVERSAL EXPLOSION SCANNER v11.5 - REGIME BALANCED
+//  REVERSAL EXPLOSION SCANNER v11.6 - REGIME BALANCED ADJUSTED
 //  🧨 Cacciatore di Breakout Rari (ULTRA/SUPER/BIG)
 //  ⚡ Generatore di Opportunità Frequenti Serie (PRE-EXPLOSION)
 //  CVD DIRECTION LOCK + Regime filter ammorbidito + tag CONTRO-REGIME
-//  v11.5 – 30-50% più segnali in trend marcato di BTC
+//  v11.6 – FULL ammorbidito del 15-20% (vol surge, OI delta, ATR)
+//  Basato su 3 giorni di test reali (zero FULL → ora 1-2 FULL/giorno attesi)
 // ===============================================
 
 const axios = require('axios');
@@ -48,7 +49,7 @@ function cleanupOldPreSignals() {
   if (cleaned > 0) { saveLastPreSignals(); console.log(`🧹 Puliti ${cleaned} PRE-segnali vecchi`); }
 }
 
-// ====================== CONFIG v11.5 Regime Balanced ======================
+// ====================== CONFIG v11.6 Regime Balanced Adjusted ======================
 const CONFIG = {
   TURNOVER_MIN: 2_000_000,
   BOOK_DEPTH_LIMIT: 500,
@@ -62,14 +63,14 @@ const CONFIG = {
   CANDLE_INTERVAL: '15',
   CANDLE_LIMIT: 3,
 
-  // FULL – bilanciato
-  CONFIRM_MIN_CVD_PERPS: 0.108,
-  CONFIRM_MIN_OI_DELTA_PCT: 0.39,
+  // FULL – ammorbidito v11.6 (15-20% più permissivo)
+  CONFIRM_MIN_CVD_PERPS: 0.108,           // invariato (edge CVD)
+  CONFIRM_MIN_OI_DELTA_PCT: 0.32,         // era 0.39
   MIN_CANDLE_BODY_RATIO: 0.56,
-  MIN_VOLUME_SURGE: 1.68,
+  MIN_VOLUME_SURGE: 1.55,                 // era 1.68
   MAX_FUNDING_LONG: 0.00042,
   MIN_FUNDING_SHORT: -0.00042,
-  MIN_ATR_PCT: 0.56,
+  MIN_ATR_PCT: 0.48,                      // era 0.56
 
   // PRE – reattivo
   CONSOLIDATION_KLINES: 36,
@@ -82,9 +83,9 @@ const CONFIG = {
   MIN_FUNDING_SHORT_PRE: -0.00075,
 
   // REGIME FILTER v11.5 (ammorbidito)
-  REGIME_FILTER_ENABLED: true,      // ← false = disattiva completamente
-  REGIME_CVD_MULTIPLIER: 1.25,      // era 1.4
-  REGIME_SCORE_ADD: 6,              // era +10
+  REGIME_FILTER_ENABLED: true,
+  REGIME_CVD_MULTIPLIER: 1.25,
+  REGIME_SCORE_ADD: 6,
 };
 
 const LEVELS = {
@@ -303,7 +304,7 @@ async function getPerpsConfirmationData(baseSymbol, expectedLong) {
   };
 }
 
-// ====================== ANALISI v11.5 (regime ammorbidito + tag) ======================
+// ====================== ANALISI v11.6 ======================
 async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, isBybit, levelKey, category = 'spot') {
   const level = LEVELS[levelKey];
   const base = symbol.replace(/USDT|USDC/, '');
@@ -338,7 +339,7 @@ async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, i
 
   const cvdDirectionOK = (isLong && data.cvd > 0) || (!isLong && data.cvd < 0);
 
-  // FULL
+  // FULL v11.6 ammorbidito
   const fullOK = cvdDirectionOK &&
     Math.abs(data.cvd) >= CONFIG.CONFIRM_MIN_CVD_PERPS &&
     data.absOiDelta >= CONFIG.CONFIRM_MIN_OI_DELTA_PCT &&
@@ -375,7 +376,7 @@ async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, i
     };
   }
 
-  // PRE
+  // PRE (invariato)
   const preOK = cvdDirectionOK &&
     Math.abs(data.cvd) >= CONFIG.CONFIRM_MIN_CVD_PERPS_PRE &&
     data.absOiDelta >= CONFIG.CONFIRM_MIN_OI_DELTA_PCT_PRE &&
@@ -413,7 +414,7 @@ async function analyzeSignal(symbol, cvdSpot, bookImbSpot, pricePct, turnover, i
   return null;
 }
 
-// ====================== ALTRE FUNZIONI ======================
+// ====================== ALTRE FUNZIONI (invariate) ======================
 async function getBtcRegime(isBybit) {
   try {
     const symbol = 'BTCUSDT';
@@ -605,7 +606,7 @@ async function scanPerpsBybit() {
 
 // ====================== MAIN ======================
 async function mainScan() {
-  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL EXPLOSION v11.5 Regime Balanced - CVD DIRECTION LOCK avviato...`);
+  console.log(`[${new Date().toLocaleTimeString('it-IT')}] REVERSAL EXPLOSION v11.6 Regime Balanced Adjusted - CVD DIRECTION LOCK avviato...`);
   cleanupOldSignals();
   cleanupOldPreSignals();
 
@@ -648,13 +649,13 @@ async function mainScan() {
   }
 
   if (content.trim().length > 30) {
-    await sendTelegram(content, '📊 EXPLOSION SCAN v11.5 Regime Balanced - CVD DIRECTION LOCK');
+    await sendTelegram(content, '📊 EXPLOSION SCAN v11.6 Regime Balanced Adjusted - CVD DIRECTION LOCK');
   } else {
     console.log('❌ Nessun segnale');
   }
 }
 
 // ====================== AVVIO ======================
-console.log(`🚀 REVERSAL EXPLOSION SCANNER v11.5 Regime Balanced avviato ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
+console.log(`🚀 REVERSAL EXPLOSION SCANNER v11.6 Regime Balanced Adjusted avviato ogni ${CONFIG.SCAN_INTERVAL_MIN} min`);
 mainScan().catch(err => console.error('Errore avvio:', err.message));
 setInterval(() => mainScan().catch(err => console.error('Errore scan:', err.message)), CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
