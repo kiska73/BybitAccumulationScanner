@@ -4,12 +4,12 @@ const axios = require("axios");
 const CONFIG = {
   SCAN_INTERVAL_MS: 30 * 60 * 1000,       // 30 minuti tra scan completi
   MIN_TURNOVER_USDT: 2_200_000,
-  ORDERBOOK_DEPTH: 200,
+  ORDERBOOK_DEPTH: 50,                    // 50 livelli (uno 0 in meno come richiesto)
   CVD_TRADES_LIMIT: 1000,
   REQUEST_TIMEOUT_MS: 10000,
   SLEEP_BETWEEN_SYMBOLS_MS: 850,
-  GROUP_SIZE: 60,                         // sicuro per rate limit
-  PAUSE_BETWEEN_GROUPS_MS: 100 * 1000     // 100 secondi pausa tra gruppi
+  GROUP_SIZE: 60,
+  PAUSE_BETWEEN_GROUPS_MS: 100 * 1000
 };
 
 // ============================= TELEGRAM =============================
@@ -93,12 +93,36 @@ async function getOrderbookImbalance(symbol) {
     const res = await axiosInstance.get(
       `https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${CONFIG.ORDERBOOK_DEPTH}`
     );
-    let bids = 0, asks = 0;
-    for (const b of res.data.bids) bids += parseFloat(b[1]);
-    for (const a of res.data.asks) asks += parseFloat(a[1]);
-    const total = bids + asks;
-    return { imbalance: total > 0 ? (bids - asks) / total : 0 };
-  } catch { return { imbalance: 0 }; }
+    
+    const bids = res.data.bids;
+    const asks = res.data.asks;
+
+    if (bids.length === 0 || asks.length === 0) return { imbalance: 0 };
+
+    let bidValue = 0;   // valore in USDT
+    let askValue = 0;   // valore in USDT
+
+    // RAGGRUPPAMENTO COME RICHIESTO: sommiamo QTY * PRICE
+    // Questo toglie automaticamente "uno 0" sui coin a 0.0001 (normalizza tutto in valore reale USDT)
+    for (const [priceStr, qtyStr] of bids) {
+      const price = parseFloat(priceStr);
+      const qty   = parseFloat(qtyStr);
+      bidValue += qty * price;
+    }
+
+    for (const [priceStr, qtyStr] of asks) {
+      const price = parseFloat(priceStr);
+      const qty   = parseFloat(qtyStr);
+      askValue += qty * price;
+    }
+
+    const totalValue = bidValue + askValue;
+    const imbalance = totalValue > 0 ? (bidValue - askValue) / totalValue : 0;
+
+    return { imbalance };
+  } catch {
+    return { imbalance: 0 };
+  }
 }
 
 async function getVolatilityPercent(symbol) {
@@ -173,7 +197,7 @@ function classifyAndPower(score) {
   return null;
 }
 
-// ============================= FORMAT =============================
+// ============================= FORMAT (con fonte dati) =============================
 function formatSignal(s) {
   const { level, power } = classifyAndPower(s.score);
   let powerStr = "";
@@ -193,7 +217,8 @@ function formatSignal(s) {
   msg += `CVD: ${(s.cvd * 100).toFixed(1)}%\n`;
   msg += `Book: ${(s.book * 100).toFixed(1)}%\n`;
   msg += `OI Δ: ${s.oiChange.toFixed(1)}%\n`;
-  msg += `Funding: ${s.funding.toFixed(5)}\n\n`;
+  msg += `Funding: ${s.funding.toFixed(5)}\n`;
+  msg += `Fonte dati: <b>Binance Spot</b> (Book + CVD) + <b>Bybit Perpetual</b> (Funding + OI)\n\n`;
   return msg;
 }
 
@@ -201,7 +226,6 @@ function formatSignal(s) {
 async function performScan() {
   console.log(`[START SCAN] ${new Date().toISOString()}`);
 
-  // Carica/aggiorna lista Bybit perpetual
   await loadBybitPerpSymbols();
 
   let tickersRes;
@@ -227,7 +251,6 @@ async function performScan() {
 
   console.log(`→ Trovati ${allSymbols.length} simboli Binance validi`);
 
-  // Divisione in gruppi
   const groups = [];
   for (let i = 0; i < allSymbols.length; i += CONFIG.GROUP_SIZE) {
     groups.push(allSymbols.slice(i, i + CONFIG.GROUP_SIZE));
@@ -244,7 +267,6 @@ async function performScan() {
     for (const symbol of group) {
       totalProcessed++;
 
-      // ==================== FILTRO BYBIT PERP =====================
       let bybitSymbol = symbol;
       if (!bybitPerpSymbols.has(symbol)) {
         const memecoinVar = `1000${symbol.replace("USDT", "")}USDT`;
@@ -253,10 +275,9 @@ async function performScan() {
         } else {
           totalDiscarded++;
           await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-          continue; // NON esiste su Bybit perpetual → skip totale
+          continue;
         }
       }
-      // ============================================================
 
       const [cvd, bookObj, funding, oiChange] = await Promise.all([
         getCVD(symbol),
