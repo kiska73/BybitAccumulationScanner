@@ -1,17 +1,18 @@
 const axios = require("axios");
 
-// ============================= // CONFIG // =============================
+// ============================= CONFIG =============================
 const CONFIG = {
-  SCAN_INTERVAL_MIN: 20,
+  SCAN_INTERVAL_MS: 30 * 60 * 1000,       // 30 minuti tra scan completi
   MIN_TURNOVER_USDT: 2_200_000,
   ORDERBOOK_DEPTH: 200,
   CVD_TRADES_LIMIT: 1000,
   REQUEST_TIMEOUT_MS: 10000,
-  SLEEP_BETWEEN_SYMBOLS_MS: 920,
-  MAX_SYMBOLS_PER_SCAN: 160
+  SLEEP_BETWEEN_SYMBOLS_MS: 850,
+  GROUP_SIZE: 60,                         // sicuro per rate limit
+  PAUSE_BETWEEN_GROUPS_MS: 100 * 1000     // 100 secondi pausa tra gruppi
 };
 
-// ============================= // TELEGRAM // =============================
+// ============================= TELEGRAM =============================
 const TELEGRAM_BOT_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
 const TELEGRAM_CHAT_ID = '820279313';
 
@@ -19,31 +20,59 @@ async function sendTelegramMessage(text) {
   try {
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        chat_id: TELEGRAM_CHAT_ID,
-        text: text,
-        parse_mode: "HTML"
-      }
+      { chat_id: TELEGRAM_CHAT_ID, text: text, parse_mode: "HTML" }
     );
   } catch (err) {
     console.log("Telegram error:", err.message);
   }
 }
 
-// ============================= // UTILS // =============================
+// ============================= UTILS =============================
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 const axiosInstance = axios.create({ timeout: CONFIG.REQUEST_TIMEOUT_MS });
 
-// ============================= // MEMORIA SEGNALI // =============================
+// ============================= MEMORIA SEGNALI =============================
 const activeSignals = new Map();
 
-// ============================= // FILTRO STABLE // =============================
+// ============================= FILTRO STABLE =============================
 const STABLES = ["USDC", "BUSD", "FDUSD", "TUSD", "USDP", "DAI", "UST", "USTC", "USDD"];
 
-// ============================= // DATA FUNCTIONS // =============================
+// ============================= BYBIT PERP FILTER (cache) =============================
+let bybitPerpSymbols = new Set();
+
+async function loadBybitPerpSymbols() {
+  console.log("🔄 Caricamento lista Bybit Perpetual Linear...");
+  let cursor = '';
+  let total = 0;
+
+  do {
+    try {
+      const url = `https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000${cursor ? `&cursor=${cursor}` : ''}`;
+      const res = await axios.get(url, { timeout: 8000 });
+      const list = res.data.result?.list || [];
+
+      for (const item of list) {
+        if (item.contractType === "LinearPerpetual" && 
+            item.quoteCoin === "USDT" && 
+            item.status === "Trading") {
+          bybitPerpSymbols.add(item.symbol);
+        }
+      }
+      total += list.length;
+      cursor = res.data.result?.nextPageCursor || '';
+    } catch (e) {
+      console.error("Errore Bybit instruments:", e.message);
+      break;
+    }
+  } while (cursor);
+
+  console.log(`✅ Bybit Perpetual Linear caricati: ${bybitPerpSymbols.size} simboli`);
+}
+
+// ============================= DATA FUNCTIONS =============================
 async function getCVD(symbol) {
   try {
     const res = await axiosInstance.get(
@@ -56,9 +85,7 @@ async function getCVD(symbol) {
       delta += t.isBuyerMaker ? -qty : qty;
     }
     return total > 0 ? delta / total : 0;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
 async function getOrderbookImbalance(symbol) {
@@ -70,11 +97,8 @@ async function getOrderbookImbalance(symbol) {
     for (const b of res.data.bids) bids += parseFloat(b[1]);
     for (const a of res.data.asks) asks += parseFloat(a[1]);
     const total = bids + asks;
-    const imbalance = total > 0 ? (bids - asks) / total : 0;
-    return { imbalance, bids, asks };
-  } catch {
-    return { imbalance: 0, bids: 0, asks: 0 };
-  }
+    return { imbalance: total > 0 ? (bids - asks) / total : 0 };
+  } catch { return { imbalance: 0 }; }
 }
 
 async function getVolatilityPercent(symbol) {
@@ -89,9 +113,7 @@ async function getVolatilityPercent(symbol) {
       if (l < low) low = l;
     }
     return low > 0 ? ((high - low) / low) * 100 : 0;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
 async function getFunding(symbol) {
@@ -101,9 +123,7 @@ async function getFunding(symbol) {
       { timeout: 6500 }
     );
     return parseFloat(res.data.result?.list?.[0]?.fundingRate ?? 0);
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
 async function getOIChange(symbol) {
@@ -117,12 +137,10 @@ async function getOIChange(symbol) {
     const cur = parseFloat(list[0].openInterest);
     const prev = parseFloat(list[1].openInterest);
     return prev > 0 ? ((cur - prev) / prev) * 100 : 0;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
 
-// ============================= // SCORE + DIRECTION // =============================
+// ============================= SCORE + DIRECTION =============================
 function calculateScoreAndDirection(cvd, book, oiChange) {
   const absBook = Math.abs(book);
   const absCvd = Math.abs(cvd);
@@ -147,7 +165,7 @@ function calculateScoreAndDirection(cvd, book, oiChange) {
   return { score: Math.min(Math.max(score, 0), 100), direction };
 }
 
-// ============================= // CLASSIFY + POWER LEVEL // =============================
+// ============================= CLASSIFY + POWER =============================
 function classifyAndPower(score) {
   if (score > 84) return { level: "NUCLEARE", power: 3 };
   if (score > 67) return { level: "POTENTE",  power: 2 };
@@ -155,46 +173,46 @@ function classifyAndPower(score) {
   return null;
 }
 
-// ============================= // FORMAT // =============================
+// ============================= FORMAT =============================
 function formatSignal(s) {
   const { level, power } = classifyAndPower(s.score);
-  if (!level) return "";
-
   let powerStr = "";
-  let dirEmoji = "";
+  let dirText = "";
 
   if (s.type.includes("LONG")) {
-    dirEmoji = "x long";
+    dirText = "x long";
     powerStr = "🔥".repeat(power);
   } else if (s.type.includes("SHORT")) {
-    dirEmoji = "short";
+    dirText = "short";
     powerStr = "💣".repeat(power);
   }
 
-  let msg = `<b>${s.symbol}</b> ${powerStr} ${dirEmoji}\n`;
-  msg += `${level} ${dirEmoji}\n`;
+  let msg = `<b>${s.symbol}</b> ${powerStr} ${dirText}\n`;
+  msg += `${level} ${dirText}\n`;
   msg += `Score: <b>${s.score.toFixed(0)}</b>\n`;
   msg += `CVD: ${(s.cvd * 100).toFixed(1)}%\n`;
   msg += `Book: ${(s.book * 100).toFixed(1)}%\n`;
   msg += `OI Δ: ${s.oiChange.toFixed(1)}%\n`;
   msg += `Funding: ${s.funding.toFixed(5)}\n\n`;
-
   return msg;
 }
 
-// ============================= // SCAN // =============================
+// ============================= SCAN =============================
 async function performScan() {
-  console.log("Starting REVERSAL SCAN —", new Date().toISOString());
+  console.log(`[START SCAN] ${new Date().toISOString()}`);
+
+  // Carica/aggiorna lista Bybit perpetual
+  await loadBybitPerpSymbols();
 
   let tickersRes;
   try {
     tickersRes = await axiosInstance.get("https://api.binance.com/api/v3/ticker/24hr");
   } catch (err) {
-    console.error("Impossibile scaricare tickers");
+    console.error("Errore tickers Binance:", err.message);
     return [];
   }
 
-  const symbols = tickersRes.data
+  let allSymbols = tickersRes.data
     .filter(t => t.symbol.endsWith("USDT"))
     .filter(t => parseFloat(t.quoteVolume) > CONFIG.MIN_TURNOVER_USDT)
     .filter(t => !STABLES.some(s => t.symbol.includes(s)))
@@ -205,100 +223,116 @@ async function performScan() {
       const range24 = ((high - low) / low) * 100;
       return range24 >= 3 && range24 <= 9;
     })
-    .map(t => t.symbol)
-    .slice(0, CONFIG.MAX_SYMBOLS_PER_SCAN);
+    .map(t => t.symbol);
 
-  console.log(`→ ${symbols.length} simboli da analizzare`);
+  console.log(`→ Trovati ${allSymbols.length} simboli Binance validi`);
 
-  const results = [];
-  let discarded = 0;
-
-  for (const symbol of symbols) {
-    const [cvd, bookObj, range12h, funding, oiChange] = await Promise.all([
-      getCVD(symbol),
-      getOrderbookImbalance(symbol),
-      getVolatilityPercent(symbol),
-      getFunding(symbol),
-      getOIChange(symbol)
-    ]);
-
-    const book = bookObj.imbalance;
-
-    if (Math.abs(book) < 0.18 || Math.abs(cvd) < 0.09) {
-      discarded++;
-      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-      continue;
-    }
-
-    const { score, direction } = calculateScoreAndDirection(cvd, book, oiChange);
-    if (!direction) {
-      discarded++;
-      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-      continue;
-    }
-
-    const classification = classifyAndPower(score);
-    if (!classification) {
-      discarded++;
-      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-      continue;
-    }
-
-    const fullType = `${classification.level} ${direction}`;
-
-    const existing = activeSignals.get(symbol);
-    if (!existing) {
-      activeSignals.set(symbol, { updates: 1, lastOI: oiChange });
-      results.push({
-        symbol,
-        type: fullType,
-        score,
-        cvd,
-        book,
-        oiChange,
-        funding
-      });
-    } else if (existing.updates < 12) {
-      if (Math.abs(oiChange - existing.lastOI) > 0.7) {
-        existing.updates++;
-        existing.lastOI = oiChange;
-        results.push({
-          symbol,
-          type: fullType + " (UPDATE)",
-          score,
-          cvd,
-          book,
-          oiChange,
-          funding
-        });
-      }
-    }
-
-    await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+  // Divisione in gruppi
+  const groups = [];
+  for (let i = 0; i < allSymbols.length; i += CONFIG.GROUP_SIZE) {
+    groups.push(allSymbols.slice(i, i + CONFIG.GROUP_SIZE));
   }
 
-  if (discarded > 0) console.log(`→ ${discarded} simboli scartati`);
+  const results = [];
+  let totalProcessed = 0;
+  let totalDiscarded = 0;
+
+  for (let g = 0; g < groups.length; g++) {
+    const group = groups[g];
+    console.log(`Gruppo ${g+1}/${groups.length} (${group.length} simboli)`);
+
+    for (const symbol of group) {
+      totalProcessed++;
+
+      // ==================== FILTRO BYBIT PERP =====================
+      let bybitSymbol = symbol;
+      if (!bybitPerpSymbols.has(symbol)) {
+        const memecoinVar = `1000${symbol.replace("USDT", "")}USDT`;
+        if (bybitPerpSymbols.has(memecoinVar)) {
+          bybitSymbol = memecoinVar;
+        } else {
+          totalDiscarded++;
+          await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+          continue; // NON esiste su Bybit perpetual → skip totale
+        }
+      }
+      // ============================================================
+
+      const [cvd, bookObj, funding, oiChange] = await Promise.all([
+        getCVD(symbol),
+        getOrderbookImbalance(symbol),
+        getFunding(bybitSymbol),
+        getOIChange(bybitSymbol)
+      ]);
+
+      const book = bookObj.imbalance;
+
+      if (Math.abs(book) < 0.18 || Math.abs(cvd) < 0.09) {
+        totalDiscarded++;
+        await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+        continue;
+      }
+
+      const { score, direction } = calculateScoreAndDirection(cvd, book, oiChange);
+      if (!direction) {
+        totalDiscarded++;
+        await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+        continue;
+      }
+
+      const classification = classifyAndPower(score);
+      if (!classification) {
+        totalDiscarded++;
+        await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+        continue;
+      }
+
+      const fullType = `${classification.level} ${direction}`;
+
+      const existing = activeSignals.get(symbol);
+      if (!existing) {
+        activeSignals.set(symbol, { updates: 1, lastOI: oiChange });
+        results.push({ symbol, type: fullType, score, cvd, book, oiChange, funding });
+      } else if (existing.updates < 12) {
+        if (Math.abs(oiChange - existing.lastOI) > 0.7) {
+          existing.updates++;
+          existing.lastOI = oiChange;
+          results.push({ symbol, type: fullType + " (UPDATE)", score, cvd, book, oiChange, funding });
+        }
+      }
+
+      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+    }
+
+    if (g < groups.length - 1) {
+      console.log(`⏳ Pausa ${CONFIG.PAUSE_BETWEEN_GROUPS_MS / 1000}s...`);
+      await sleep(CONFIG.PAUSE_BETWEEN_GROUPS_MS);
+    }
+  }
+
+  console.log(`[FINE SCAN] Processati ${totalProcessed} | Scartati ${totalDiscarded} | Segnali ${results.length}`);
 
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, 12);
 }
 
-// ============================= // MAIN // =============================
+// ============================= MAIN =============================
 async function main() {
   const signals = await performScan();
   if (signals.length === 0) {
-    console.log("Nessun segnale");
+    console.log("Nessun segnale questa volta");
     return;
   }
 
-  let msg = "<b>REVERSAL SCAN</b>\n\n";
+  let msg = "<b>REVERSAL SCAN — FULL (Bybit Only)</b>\n\n";
   for (const s of signals) {
     msg += formatSignal(s);
   }
 
   await sendTelegramMessage(msg);
-  console.log(`→ Inviati ${signals.length} segnali`);
+  console.log(`📤 Inviati ${signals.length} segnali`);
 }
 
+// Avvio
 main();
-setInterval(main, CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
+setInterval(main, CONFIG.SCAN_INTERVAL_MS);
