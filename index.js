@@ -1,17 +1,17 @@
 const axios = require("axios");
 
-// ============================= CONFIG =============================
+// ============================= // CONFIG // =============================
 const CONFIG = {
   SCAN_INTERVAL_MIN: 20,
-  MIN_TURNOVER_USDT: 1_800_000,      // un po' più permissivo
+  MIN_TURNOVER_USDT: 2_200_000,
   ORDERBOOK_DEPTH: 200,
   CVD_TRADES_LIMIT: 1000,
   REQUEST_TIMEOUT_MS: 10000,
-  SLEEP_BETWEEN_SYMBOLS_MS: 950,     // ↑ per ridurre rischio ban
-  MAX_SYMBOLS_PER_SCAN: 180,         // protezione rate-limit
+  SLEEP_BETWEEN_SYMBOLS_MS: 920,
+  MAX_SYMBOLS_PER_SCAN: 160
 };
 
-// ============================= TELEGRAM =============================
+// ============================= // TELEGRAM // =============================
 const TELEGRAM_BOT_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
 const TELEGRAM_CHAT_ID = '820279313';
 
@@ -30,18 +30,20 @@ async function sendTelegramMessage(text) {
   }
 }
 
-// ============================= UTILS =============================
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// ============================= // UTILS // =============================
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 const axiosInstance = axios.create({ timeout: CONFIG.REQUEST_TIMEOUT_MS });
 
-// ============================= MEMORIA SEGNALI =============================
+// ============================= // MEMORIA SEGNALI // =============================
 const activeSignals = new Map();
 
-// ============================= FILTRO STABLE =============================
+// ============================= // FILTRO STABLE // =============================
 const STABLES = ["USDC", "BUSD", "FDUSD", "TUSD", "USDP", "DAI", "UST", "USTC", "USDD"];
 
-// ============================= DATA FUNCTIONS =============================
+// ============================= // DATA FUNCTIONS // =============================
 async function getCVD(symbol) {
   try {
     const res = await axiosInstance.get(
@@ -92,12 +94,12 @@ async function getVolatilityPercent(symbol) {
   }
 }
 
-// Bybit – con fallback
+// Bybit Funding & OI (con fallback sicuro)
 async function getFunding(symbol) {
   try {
     const res = await axios.get(
       `https://api.bybit.com/v5/market/funding/history?category=linear&symbol=${symbol}&limit=1`,
-      { timeout: 6000 }
+      { timeout: 6500 }
     );
     return parseFloat(res.data.result?.list?.[0]?.fundingRate ?? 0);
   } catch {
@@ -109,7 +111,7 @@ async function getOIChange(symbol) {
   try {
     const res = await axios.get(
       `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=15min&limit=2`,
-      { timeout: 6000 }
+      { timeout: 6500 }
     );
     const list = res.data.result?.list ?? [];
     if (list.length < 2) return 0;
@@ -117,76 +119,92 @@ async function getOIChange(symbol) {
     const prev = parseFloat(list[1].openInterest);
     return prev > 0 ? ((cur - prev) / prev) * 100 : 0;
   } catch {
-    return 0;   // ← non blocca più il segnale
+    return 0;
   }
 }
 
-// ============================= SCORE =============================
-function calculateScore(data) {
+// ============================= // SCORE + DIRECTION // =============================
+function calculateScoreAndDirection(cvd, book, oiChange) {
+  const absBook = Math.abs(book);
+  const absCvd = Math.abs(cvd);
+  const absOi = Math.abs(oiChange || 0);
+
   let score = 0;
+  score += absBook * 48;      // book spot = re
+  score += absCvd * 35;       // CVD aggressivo
+  score += absOi * 22;        // OI in movimento
 
-  // pesi base (più equilibrati)
-  score += Math.abs(data.cvd)   * 38;
-  score += Math.abs(data.book)  * 28;
-  score += Math.abs(data.oiChange || 0) * 18;
+  // bonus forza
+  if (absBook > 0.32) score += 14;
+  if (absCvd > 0.24) score += 11;
+  if (absOi > 2.2) score += 9;
 
-  // bonus realistici
-  if (Math.abs(data.cvd)   > 0.22) score += 8;
-  if (Math.abs(data.book)  > 0.18) score += 7;
-  if (data.oiChange > 1.8)         score += 9;
-  if (data.oiChange > 3.2)         score += 6;   // extra per squeeze veri
-  if (data.funding < -0.0005)      score += 5;   // short funding → long squeeze più probabile
+  // bonus allineamento (stesso segno book + cvd)
+  const aligned = (book > 0 && cvd > 0) || (book < 0 && cvd < 0);
+  if (aligned) score += 12;
 
-  return Math.min(Math.max(score, 0), 100);
+  // direzione
+  let direction = null;
+  if (book > 0.18 && cvd > 0.09 && (oiChange || 0) > 0.6) direction = "LONG";
+  else if (book < -0.18 && cvd < -0.09 && (oiChange || 0) < -0.6) direction = "SHORT";
+
+  return { score: Math.min(Math.max(score, 0), 100), direction };
 }
 
-// ============================= CLASSIFY =============================
+// ============================= // CLASSIFY // =============================
 function classify(score) {
-  if (score > 78) return "EXPLOSION";
-  if (score > 62) return "BUILDING";
-  if (score > 44) return "ACCUMULATION";
+  if (score > 84) return "NUCLEARE";
+  if (score > 67) return "POTENTE";
+  if (score > 49) return "BUONO";
   return null;
 }
 
-// ============================= FORMAT =============================
+// ============================= // FORMAT // =============================
 function formatSignal(s) {
   let msg = `<b>${s.symbol}</b>\n`;
   msg += `${s.type}\n`;
   msg += `Score: <b>${s.score.toFixed(0)}</b>\n`;
   msg += `CVD: ${(s.cvd * 100).toFixed(1)}%\n`;
   msg += `Book: ${(s.book * 100).toFixed(1)}%\n`;
-  msg += `OI Δ: ${s.oiChange?.toFixed(1) ?? "—"}%\n`;
-  msg += `Funding: ${s.funding?.toFixed(5) ?? "—"}%\n\n`;
+  msg += `OI Δ: ${s.oiChange.toFixed(1)}%\n`;
+  msg += `Funding: ${s.funding.toFixed(5)}\n\n`;
   return msg;
 }
 
-// ============================= SCAN =============================
+// ============================= // SCAN // =============================
 async function performScan() {
-  console.log("Starting scan —", new Date().toISOString());
+  console.log("Starting REVERSAL SCAN (LONG + SHORT) —", new Date().toISOString());
 
-  let tickers;
+  let tickersRes;
   try {
-    const res = await axiosInstance.get("https://api.binance.com/api/v3/ticker/24hr");
-    tickers = res.data;
+    tickersRes = await axiosInstance.get("https://api.binance.com/api/v3/ticker/24hr");
   } catch (err) {
-    console.error("Cannot fetch tickers", err.message);
+    console.error("Impossibile scaricare tickers");
     return [];
   }
 
-  let symbols = tickers
+  const symbols = tickersRes.data
     .filter(t => t.symbol.endsWith("USDT"))
     .filter(t => parseFloat(t.quoteVolume) > CONFIG.MIN_TURNOVER_USDT)
     .filter(t => !STABLES.some(s => t.symbol.includes(s)))
+    .filter(t => {
+      const high = parseFloat(t.highPrice);
+      const low = parseFloat(t.lowPrice);
+      const last = parseFloat(t.lastPrice);
+      if (high === low) return false;
+      const range24 = ((high - low) / low) * 100;
+      return range24 >= 3 && range24 <= 9;   // range accumulazione / distribuzione decente
+    })
     .map(t => t.symbol)
     .slice(0, CONFIG.MAX_SYMBOLS_PER_SCAN);
 
-  console.log(`→ ${symbols.length} symbols to check`);
+  console.log(`→ ${symbols.length} simboli da analizzare`);
 
   const results = [];
-  let discardedLowScore = 0;
+  let discarded = 0;
 
   for (const symbol of symbols) {
-    const [cvd, bookObj, range, funding, oiChange] = await Promise.all([
+    const [cvd, bookObj, range12h, funding, oiChange] = await Promise.all([
       getCVD(symbol),
       getOrderbookImbalance(symbol),
       getVolatilityPercent(symbol),
@@ -196,62 +214,83 @@ async function performScan() {
 
     const book = bookObj.imbalance;
 
-    // filtri anti-rumore (allentati)
-    if (Math.abs(cvd)     < 0.09) continue;
-    if (Math.abs(book)    < 0.065) continue;
-    if (Math.abs(oiChange || 0) < 0.5 && oiChange !== 0) continue; // 0 è ok (Bybit fallito)
-    if (range             < 2.8)  continue;   // ← alzato
+    // Filtro anti-rumore comune
+    if (Math.abs(book) < 0.18 || Math.abs(cvd) < 0.09) {
+      discarded++;
+      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+      continue;
+    }
 
-    const score = calculateScore({ cvd, book, oiChange, funding });
-
-    // debug – vedi cosa scartiamo
-    if (score < 38 && score > 0) {
-      discardedLowScore++;
-      // console.log(`${symbol.padEnd(12)} | score ${score.toFixed(1)}`.padEnd(30), `cvd ${cvd.toFixed(3)} book ${book.toFixed(3)} oi ${oiChange?.toFixed(2) ?? "—"}`);
+    const { score, direction } = calculateScoreAndDirection(cvd, book, oiChange);
+    if (!direction) {
+      discarded++;
+      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+      continue;
     }
 
     const type = classify(score);
-    if (!type) continue;
+    if (!type) {
+      discarded++;
+      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+      continue;
+    }
+
+    const fullType = `${type} ${direction}`;
 
     const existing = activeSignals.get(symbol);
     if (!existing) {
-      activeSignals.set(symbol, { updates: 1, lastOI: oiChange ?? 0 });
-      results.push({ symbol, type, score, cvd, book, oiChange, funding });
+      activeSignals.set(symbol, { updates: 1, lastOI: oiChange });
+      results.push({
+        symbol,
+        type: fullType,
+        score,
+        cvd,
+        book,
+        oiChange,
+        funding
+      });
     } else if (existing.updates < 12) {
-      if (Math.abs((oiChange ?? 0) - existing.lastOI) > 0.6) {
+      if (Math.abs(oiChange - existing.lastOI) > 0.7) {
         existing.updates++;
-        existing.lastOI = oiChange ?? existing.lastOI;
-        results.push({ symbol, type: "UPDATE", score, cvd, book, oiChange, funding });
+        existing.lastOI = oiChange;
+        results.push({
+          symbol,
+          type: fullType + " (UPDATE)",
+          score,
+          cvd,
+          book,
+          oiChange,
+          funding
+        });
       }
     }
 
     await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
   }
 
-  if (discardedLowScore > 0) {
-    console.log(`→ ${discardedLowScore} simboli scartati per score < 38`);
-  }
+  if (discarded > 0) console.log(`→ ${discarded} simboli scartati (troppo deboli)`);
 
   results.sort((a, b) => b.score - a.score);
-  return results.slice(0, 10);
+  return results.slice(0, 12);   // max 12 per non spam
 }
 
-// ============================= MAIN =============================
+// ============================= // MAIN // =============================
 async function main() {
   const signals = await performScan();
   if (signals.length === 0) {
-    console.log("No signals this round");
+    console.log("Nessun segnale questa tornata");
     return;
   }
 
-  let msg = "<b>REVERSAL EXPLOSION SCAN</b>\n\n";
+  let msg = "<b>REVERSAL SCAN — LONG + SHORT</b>\n\n";
   for (const s of signals) {
     msg += formatSignal(s);
   }
 
   await sendTelegramMessage(msg);
-  console.log(`→ Inviati ${signals.length} segnali`);
+  console.log(`→ Inviati ${signals.length} segnali (LONG + SHORT)`);
 }
 
+// ============================= // AVVIO // =============================
 main();
 setInterval(main, CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
