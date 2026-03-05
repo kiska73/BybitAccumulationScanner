@@ -4,9 +4,9 @@ const axios = require("axios");
 const CONFIG = {
   SCAN_INTERVAL_MIN: 35,
   MIN_QUOTE_VOLUME_USDT: 2_000_000,
-  KLINE_INTERVAL: "5m",
-  KLINE_LIMIT: 48,
-  MAX_RANGE_PCT: 2.2,
+  KLINE_INTERVAL: "15m",
+  KLINE_LIMIT: 16,
+  MAX_RANGE_PCT: 2.6,
   MIN_IMBALANCE_ONE_EXCHANGE_PCT: 68,
   MIN_IMBALANCE_OTHER_PCT: 52,
   MIN_PRESSURE_PCT: 60,                    // stesso valore per buy e sell pressure
