@@ -2,350 +2,307 @@ const axios = require("axios");
 
 // ============================= CONFIG =============================
 const CONFIG = {
-  SCAN_INTERVAL_MS: 30 * 60 * 1000,       // 30 minuti tra scan completi
-  MIN_TURNOVER_USDT: 2_200_000,
+  SCAN_INTERVAL_MIN: 15,
+  MIN_QUOTE_VOLUME_USDT: 2_000_000,
+  KLINE_INTERVAL: "5m",
+  KLINE_LIMIT: 48,                     // 4 ore esatte
+  MAX_RANGE_PCT: 2.2,
+  MIN_IMBALANCE_ONE_EXCHANGE_PCT: 68,
+  MIN_IMBALANCE_OTHER_PCT: 52,
+  MIN_BUY_PRESSURE_PCT: 60,
   ORDERBOOK_DEPTH: 50,
-  CVD_TRADES_LIMIT: 1000,
-  REQUEST_TIMEOUT_MS: 10000,
-  SLEEP_BETWEEN_SYMBOLS_MS: 850,
-  GROUP_SIZE: 50,                         // ridotto perché più chiamate per simbolo
-  PAUSE_BETWEEN_GROUPS_MS: 120 * 1000
+  CVD_TRADES_LIMIT: 500,
+  MIN_WALL_VALUE_USDT: 30_000,
+  WALL_BONUS_THRESHOLD_PCT: 6.0,
+  REQUEST_TIMEOUT_MS: 8000,
+  SLEEP_BETWEEN_SYMBOLS_MS: 300,
 };
 
 // ============================= TELEGRAM =============================
 const TELEGRAM_BOT_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
 const TELEGRAM_CHAT_ID = '820279313';
 
-async function sendTelegramMessage(text) {
+async function sendTelegram(text) {
   try {
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      { chat_id: TELEGRAM_CHAT_ID, text: text, parse_mode: "HTML" }
+      { chat_id: TELEGRAM_CHAT_ID, text, parse_mode: "HTML" }
     );
   } catch (err) {
-    console.log("Telegram error:", err.message);
+    console.error("Telegram error:", err.message);
   }
 }
 
 // ============================= UTILS =============================
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const ax = axios.create({ timeout: CONFIG.REQUEST_TIMEOUT_MS });
 
-const axiosInstance = axios.create({ timeout: CONFIG.REQUEST_TIMEOUT_MS });
+const STABLES = ["USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDD"];
 
-// ============================= MEMORIA SEGNALI =============================
-const activeSignals = new Map();
+// ============================= RAGGRUPPAMENTO BOOK (1 decimale in meno) =============================
+function aggregateLevels(levels, isBid = true) {
+  const grouped = new Map();
 
-// ============================= FILTRO STABLE =============================
-const STABLES = ["USDC", "BUSD", "FDUSD", "TUSD", "USDP", "DAI", "UST", "USTC", "USDD"];
+  for (const [priceStr, qtyStr] of levels) {
+    let price = parseFloat(priceStr);
+    const qty = parseFloat(qtyStr);
+    const value = price * qty;
 
-// ============================= CACHE BYBIT =============================
-let bybitPerpSymbols = new Set();
-let bybitSpotSymbols = new Set();
+    let groupedPrice;
 
-async function loadBybitPerpSymbols() {
-  console.log("🔄 Caricamento Bybit Perpetual Linear...");
-  let cursor = '';
-  do {
-    try {
-      const url = `https://api.bybit.com/v5/market/instruments-info?category=linear&limit=1000${cursor ? `&cursor=${cursor}` : ''}`;
-      const res = await axios.get(url, { timeout: 8000 });
-      const list = res.data.result?.list || [];
-      for (const item of list) {
-        if (item.contractType === "LinearPerpetual" && item.quoteCoin === "USDT" && item.status === "Trading") {
-          bybitPerpSymbols.add(item.symbol);
-        }
-      }
-      cursor = res.data.result?.nextPageCursor || '';
-    } catch (e) { console.error("Bybit perp error:", e.message); break; }
-  } while (cursor);
-  console.log(`✅ Bybit Perpetual: ${bybitPerpSymbols.size} simboli`);
-}
-
-async function loadBybitSpotSymbols() {
-  console.log("🔄 Caricamento Bybit Spot USDT...");
-  let cursor = '';
-  do {
-    try {
-      const url = `https://api.bybit.com/v5/market/instruments-info?category=spot&limit=1000${cursor ? `&cursor=${cursor}` : ''}`;
-      const res = await axios.get(url, { timeout: 8000 });
-      const list = res.data.result?.list || [];
-      for (const item of list) {
-        if (item.quoteCoin === "USDT" && item.status === "Trading") {
-          bybitSpotSymbols.add(item.symbol);
-        }
-      }
-      cursor = res.data.result?.nextPageCursor || '';
-    } catch (e) { console.error("Bybit spot error:", e.message); break; }
-  } while (cursor);
-  console.log(`✅ Bybit Spot: ${bybitSpotSymbols.size} simboli`);
-}
-
-// ============================= DATA FUNCTIONS =============================
-// Binance (rimangono uguali)
-async function getCVD(symbol) {
-  try {
-    const res = await axiosInstance.get(`https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${CONFIG.CVD_TRADES_LIMIT}`);
-    let delta = 0, total = 0;
-    for (const t of res.data) {
-      const qty = parseFloat(t.qty);
-      total += qty;
-      delta += t.isBuyerMaker ? -qty : qty;
+    if (price >= 1) {
+      groupedPrice = Math.floor(price * 10) / 10;           // 123.45 → 123.4
+    } else if (price >= 0.1) {
+      groupedPrice = Math.floor(price * 100) / 100;         // 1.2345 → 1.23
+    } else if (price >= 0.01) {
+      groupedPrice = Math.floor(price * 1000) / 1000;       // 0.12345 → 0.123
+    } else if (price >= 0.001) {
+      groupedPrice = Math.floor(price * 10000) / 10000;     // 0.012345 → 0.0123
+    } else if (price >= 0.0001) {
+      groupedPrice = Math.floor(price * 10000) / 10000;     // 0.00012345 → 0.0001  ← quello che volevi
+    } else if (price >= 0.00001) {
+      groupedPrice = Math.floor(price * 100000) / 100000;
+    } else {
+      groupedPrice = Math.floor(price * 1000000) / 1000000;
     }
-    return total > 0 ? delta / total : 0;
-  } catch { return 0; }
-}
 
-async function getOrderbookImbalance(symbol) {
-  try {
-    const res = await axiosInstance.get(`https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${CONFIG.ORDERBOOK_DEPTH}`);
-    const bids = res.data.bids || [];
-    const asks = res.data.asks || [];
-    let bidValue = 0, askValue = 0;
-    for (const [p, q] of bids) { bidValue += parseFloat(q) * parseFloat(p); }
-    for (const [p, q] of asks) { askValue += parseFloat(q) * parseFloat(p); }
-    const total = bidValue + askValue;
-    return total > 0 ? (bidValue - askValue) / total : 0;
-  } catch { return 0; }
-}
-
-// === NUOVE FUNZIONI BYBIT SPOT ===
-async function getBybitSpotOrderbook(symbol) {
-  try {
-    const res = await axiosInstance.get(`https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${symbol}&limit=${CONFIG.ORDERBOOK_DEPTH}`);
-    const bids = res.data.result?.b || [];
-    const asks = res.data.result?.a || [];
-    let bidValue = 0, askValue = 0;
-    for (const [p, q] of bids) { bidValue += parseFloat(q) * parseFloat(p); }
-    for (const [p, q] of asks) { askValue += parseFloat(q) * parseFloat(p); }
-    const total = bidValue + askValue;
-    return total > 0 ? (bidValue - askValue) / total : 0;
-  } catch { return 0; }
-}
-
-// === NUOVA FUNZIONE BYBIT PERP ORDERBOOK (per confronto) ===
-async function getBybitPerpOrderbook(symbol) {
-  try {
-    const res = await axiosInstance.get(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${symbol}&limit=${CONFIG.ORDERBOOK_DEPTH}`);
-    const bids = res.data.result?.b || [];
-    const asks = res.data.result?.a || [];
-    let bidValue = 0, askValue = 0;
-    for (const [p, q] of bids) { bidValue += parseFloat(q) * parseFloat(p); }
-    for (const [p, q] of asks) { askValue += parseFloat(q) * parseFloat(p); }
-    const total = bidValue + askValue;
-    return total > 0 ? (bidValue - askValue) / total : 0;
-  } catch { return 0; }
-}
-
-async function getFunding(symbol) {
-  try {
-    const res = await axios.get(`https://api.bybit.com/v5/market/funding/history?category=linear&symbol=${symbol}&limit=1`, { timeout: 6500 });
-    return parseFloat(res.data.result?.list?.[0]?.fundingRate ?? 0);
-  } catch { return 0; }
-}
-
-async function getOIChange(symbol) {
-  try {
-    const res = await axios.get(`https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=15min&limit=2`, { timeout: 6500 });
-    const list = res.data.result?.list ?? [];
-    if (list.length < 2) return 0;
-    const cur = parseFloat(list[0].openInterest);
-    const prev = parseFloat(list[1].openInterest);
-    return prev > 0 ? ((cur - prev) / prev) * 100 : 0;
-  } catch { return 0; }
-}
-
-// ============================= SCORE + CONFLUENZA =============================
-function calculateCompositeScoreAndDirection(binanceBook, bybitSpotBook, bybitPerpBook, cvd, oiChange) {
-  const books = [binanceBook, bybitSpotBook, bybitPerpBook];
-  const avgBook = books.reduce((a, b) => a + b, 0) / 3;
-  const absBooks = books.map(Math.abs);
-  const maxBook = Math.max(...absBooks);
-  const positiveCount = books.filter(b => b > 0.15).length;   // almeno 2/3 positivi = buona confluenza
-
-  let score = 0;
-  score += Math.abs(avgBook) * 45;
-  score += Math.abs(cvd) * 32;
-  score += Math.abs(oiChange || 0) * 23;
-
-  if (maxBook > 0.45) score += 18;
-  if (positiveCount >= 2) score += 15;
-  if (positiveCount === 3) score += 12;
-  if (Math.abs(cvd) > 0.22) score += 10;
-
-  const aligned = (avgBook > 0 && cvd > 0) || (avgBook < 0 && cvd < 0);
-  if (aligned) score += 14;
-
-  let direction = null;
-  if (avgBook > 0.22 && cvd > 0.10 && (oiChange || 0) > 0.5 && positiveCount >= 2) {
-    direction = "LONG";
-  } else if (avgBook < -0.22 && cvd < -0.10 && (oiChange || 0) < -0.5 && positiveCount >= 2) {
-    direction = "SHORT";
+    if (!grouped.has(groupedPrice)) grouped.set(groupedPrice, 0);
+    grouped.set(groupedPrice, grouped.get(groupedPrice) + value);
   }
 
-  return { 
-    score: Math.min(Math.max(score, 0), 100), 
-    direction, 
-    avgBook,
-    positiveCount 
-  };
+  let result = Array.from(grouped, ([price, value]) => [price, value]);
+  result.sort((a, b) => isBid ? b[0] - a[0] : a[0] - b[0]);
+  return result;
 }
 
-function classifyAndPower(score) {
-  if (score > 82) return { level: "NUCLEARE", power: 3 };
-  if (score > 68) return { level: "POTENTE",  power: 2 };
-  if (score > 52) return { level: "BUONO",    power: 1 };
+// ============================= FUNZIONI DATA =============================
+
+async function getHighVolumeSymbols() {
+  try {
+    const { data } = await ax.get("https://api.binance.com/api/v3/ticker/24hr");
+    return data
+      .filter(t => t.symbol.endsWith("USDT"))
+      .filter(t => !STABLES.some(s => t.symbol.includes(s)))
+      .filter(t => parseFloat(t.quoteVolume) >= CONFIG.MIN_QUOTE_VOLUME_USDT)
+      .map(t => t.symbol);
+  } catch (err) {
+    console.error("Errore tickers:", err.message);
+    return [];
+  }
+}
+
+async function get4hRangePercent(symbol) {
+  try {
+    const { data } = await ax.get(
+      `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${CONFIG.KLINE_INTERVAL}&limit=${CONFIG.KLINE_LIMIT}`
+    );
+    if (!data?.length) return 999;
+
+    const highs = data.map(c => parseFloat(c[2]));
+    const lows  = data.map(c => parseFloat(c[3]));
+
+    const maxH = Math.max(...highs);
+    const minL = Math.min(...lows);
+
+    return minL > 0 ? ((maxH - minL) / minL) * 100 : 999;
+  } catch {
+    return 999;
+  }
+}
+
+async function getOrderbookData(exchange, symbol) {
+  try {
+    let url;
+    if (exchange === "binance") {
+      url = `https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${CONFIG.ORDERBOOK_DEPTH}`;
+    } else {
+      url = `https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${symbol}&limit=${CONFIG.ORDERBOOK_DEPTH}`;
+    }
+
+    const { data } = await ax.get(url);
+
+    let rawBids = exchange === "binance" ? data.bids : (data.result?.b || []);
+    let rawAsks = exchange === "binance" ? data.asks : (data.result?.a || []);
+
+    // RAGGRUPPAMENTO CON 1 DECIMALE IN MENO
+    const bids = aggregateLevels(rawBids, true);
+    const asks = aggregateLevels(rawAsks, false);
+
+    let bidValue = 0, askValue = 0, largestBidValue = 0;
+
+    bids.forEach(([p, v]) => {
+      bidValue += v;
+      if (v > largestBidValue) largestBidValue = v;
+    });
+
+    asks.forEach(([p, v]) => {
+      askValue += v;
+    });
+
+    const totalValue = bidValue + askValue;
+    const imbalancePct = totalValue > 0 ? (bidValue / totalValue) * 100 : 0;
+    const largestBidPct = totalValue > 0 ? (largestBidValue / totalValue) * 100 : 0;
+
+    return {
+      imbalancePct: Math.min(imbalancePct, 99.9),
+      largestBidPct,
+      largestBidValue: Math.round(largestBidValue),
+      totalValue: Math.round(totalValue)
+    };
+  } catch (err) {
+    console.error(`Orderbook error ${symbol} (${exchange}):`, err.message);
+    return {
+      imbalancePct: 0,
+      largestBidPct: 0,
+      largestBidValue: 0,
+      totalValue: 0
+    };
+  }
+}
+
+async function getBuyPressurePct(symbol) {
+  try {
+    const { data } = await ax.get(
+      `https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${CONFIG.CVD_TRADES_LIMIT}`
+    );
+    let buyVol = 0, totalVol = 0;
+    for (const t of data) {
+      const qty = parseFloat(t.qty);
+      totalVol += qty;
+      if (!t.isBuyerMaker) buyVol += qty;
+    }
+    return totalVol > 0 ? (buyVol / totalVol) * 100 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function calculateScore(rangePct, imbBin, imbByb, buyPct, maxLargestBidPct, maxLargestBidValue) {
+  let score = 0;
+
+  if      (rangePct <= 0.9)  score += 32;
+  else if (rangePct <= 1.3)  score += 27;
+  else if (rangePct <= 1.8)  score += 20;
+
+  const maxImb  = Math.max(imbBin, imbByb);
+  const avgImb  = (imbBin + imbByb) / 2;
+
+  if      (maxImb >= 85)     score += 34;
+  else if (maxImb >= 80)     score += 28;
+  else if (maxImb >= 75)     score += 24;
+  else if (maxImb >= 72)     score += 20;
+  else if (avgImb  >= 68)    score += 16;
+
+  if      (buyPct >= 66)     score += 25;
+  else if (buyPct >= 62)     score += 20;
+  else if (buyPct >= 58)     score += 14;
+
+  if (maxLargestBidPct >= CONFIG.WALL_BONUS_THRESHOLD_PCT && 
+      maxLargestBidValue >= CONFIG.MIN_WALL_VALUE_USDT) {
+    score += 8;
+  }
+
+  return Math.min(score, 100);
+}
+
+function getLevel(score) {
+  if (score >= 85) return "NUCLEARE 🚀🚀🚀";
+  if (score >= 70) return "OTTIMO 🚀🚀";
+  if (score >= 55) return "BUONO 🚀";
   return null;
 }
 
-// ============================= FORMAT (confronto multi-exchange) =============================
-function formatSignal(s) {
-  const { level, power } = classifyAndPower(s.score);
-  const powerStr = s.direction.includes("LONG") ? "🔥".repeat(power) : "💣".repeat(power);
-  const dirText = s.direction.includes("LONG") ? "x LONG" : "SHORT";
-
-  let msg = `<b>${s.symbol}</b> ${powerStr} ${dirText}\n`;
-  msg += `${level} ${dirText}\n`;
-  msg += `Score: <b>${s.score.toFixed(0)}</b> | Confluenza: ${s.positiveCount}/3\n`;
-  msg += `Book Binance Spot: <b>${(s.binanceBook * 100).toFixed(1)}%</b>\n`;
-  msg += `Book Bybit Spot:    <b>${(s.bybitSpotBook * 100).toFixed(1)}%</b>\n`;
-  msg += `Book Bybit Perp:   <b>${(s.bybitPerpBook * 100).toFixed(1)}%</b>\n`;
-  msg += `Book Medio: <b>${(s.avgBook * 100).toFixed(1)}%</b>\n`;
-  msg += `CVD Binance: ${(s.cvd * 100).toFixed(1)}%\n`;
-  msg += `OI Δ: ${s.oiChange.toFixed(1)}% ${s.oiChange > 0 ? '📈' : '📉'}\n`;
-  msg += `Funding: ${s.funding.toFixed(5)}\n`;
-  msg += `Fonte: <b>Binance Spot + Bybit Spot + Bybit Perp</b>\n\n`;
-  return msg;
-}
-
 // ============================= SCAN =============================
-async function performScan() {
-  console.log(`[START SCAN MULTI-EXCHANGE] ${new Date().toISOString()}`);
+async function scan() {
+  console.log(`[SCAN ${new Date().toISOString()}] Ricerca accumulo spot + bid wall`);
 
-  await Promise.all([loadBybitPerpSymbols(), loadBybitSpotSymbols()]);
+  const symbols = await getHighVolumeSymbols();
+  console.log(`→ ${symbols.length} simboli volume OK`);
 
-  // 1. Binance tickers (filtro volume + range)
-  let binanceTickers = [];
-  try {
-    const res = await axiosInstance.get("https://api.binance.com/api/v3/ticker/24hr");
-    binanceTickers = res.data
-      .filter(t => t.symbol.endsWith("USDT"))
-      .filter(t => parseFloat(t.quoteVolume) > CONFIG.MIN_TURNOVER_USDT)
-      .filter(t => !STABLES.some(s => t.symbol.includes(s)))
-      .filter(t => {
-        const h = parseFloat(t.highPrice), l = parseFloat(t.lowPrice);
-        const range = l > 0 ? ((h - l) / l) * 100 : 0;
-        return range >= 3 && range <= 9;
-      })
-      .map(t => t.symbol);
-  } catch (e) { console.error("Binance tickers error:", e.message); }
+  const signals = [];
 
-  // 2. Solo simboli presenti su TUTTE e tre le piattaforme
-  const candidates = binanceTickers.filter(sym => 
-    bybitSpotSymbols.has(sym) && bybitPerpSymbols.has(sym)
-  );
+  for (const symbol of symbols) {
+    const [rangePct, binanceBook, bybitBook, buyPct] = await Promise.all([
+      get4hRangePercent(symbol),
+      getOrderbookData("binance", symbol),
+      getOrderbookData("bybit", symbol),
+      getBuyPressurePct(symbol),
+    ]);
 
-  console.log(`→ Trovati ${candidates.length} simboli con presenza su Binance Spot + Bybit Spot + Bybit Perp`);
+    await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
 
-  const groups = [];
-  for (let i = 0; i < candidates.length; i += CONFIG.GROUP_SIZE) {
-    groups.push(candidates.slice(i, i + CONFIG.GROUP_SIZE));
-  }
+    if (rangePct > CONFIG.MAX_RANGE_PCT) continue;
 
-  const results = [];
-  let totalProcessed = 0;
+    const maxImb = Math.max(binanceBook.imbalancePct, bybitBook.imbalancePct);
+    const minImb = Math.min(binanceBook.imbalancePct, bybitBook.imbalancePct);
 
-  for (let g = 0; g < groups.length; g++) {
-    const group = groups[g];
-    console.log(`Gruppo ${g+1}/${groups.length}`);
+    if (maxImb < CONFIG.MIN_IMBALANCE_ONE_EXCHANGE_PCT) continue;
+    if (minImb < CONFIG.MIN_IMBALANCE_OTHER_PCT) continue;
 
-    for (const symbol of group) {
-      totalProcessed++;
+    if (buyPct < CONFIG.MIN_BUY_PRESSURE_PCT) continue;
 
-      // === FETCH MULTI-EXCHANGE ===
-      const [binanceBook, bybitSpotBook, bybitPerpBook, cvd, funding, oiChange] = await Promise.all([
-        getOrderbookImbalance(symbol),
-        getBybitSpotOrderbook(symbol),
-        getBybitPerpOrderbook(symbol),
-        getCVD(symbol),
-        getFunding(symbol),
-        getOIChange(symbol)
-      ]);
+    const maxLargestBidPct  = Math.max(binanceBook.largestBidPct, bybitBook.largestBidPct);
+    const maxLargestBidValue = Math.max(binanceBook.largestBidValue, bybitBook.largestBidValue);
 
-      const absMaxBook = Math.max(Math.abs(binanceBook), Math.abs(bybitSpotBook), Math.abs(bybitPerpBook));
-      if (absMaxBook < 0.20 || Math.abs(cvd) < 0.09) {
-        await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-        continue;
-      }
+    const score = calculateScore(
+      rangePct,
+      binanceBook.imbalancePct,
+      bybitBook.imbalancePct,
+      buyPct,
+      maxLargestBidPct,
+      maxLargestBidValue
+    );
 
-      const { score, direction, avgBook, positiveCount } = calculateCompositeScoreAndDirection(
-        binanceBook, bybitSpotBook, bybitPerpBook, cvd, oiChange
-      );
+    const level = getLevel(score);
 
-      if (!direction) {
-        await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-        continue;
-      }
+    if (level) {
+      const strongExchange = binanceBook.imbalancePct > bybitBook.imbalancePct ? "Binance" : "Bybit";
+      const strongImbValue = Math.max(binanceBook.imbalancePct, bybitBook.imbalancePct);
 
-      const classification = classifyAndPower(score);
-      if (!classification) {
-        await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-        continue;
-      }
-
-      const fullType = `${classification.level} ${direction}`;
-
-      const existing = activeSignals.get(symbol);
-      if (!existing || existing.updates < 12) {
-        if (!existing || Math.abs(oiChange - (existing.lastOI || 0)) > 0.7) {
-          activeSignals.set(symbol, { updates: (existing?.updates || 0) + 1, lastOI: oiChange });
-          results.push({
-            symbol,
-            type: fullType,
-            score,
-            direction,
-            binanceBook,
-            bybitSpotBook,
-            bybitPerpBook,
-            avgBook,
-            cvd,
-            oiChange,
-            funding,
-            positiveCount
-          });
-        }
-      }
-
-      await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+      signals.push({
+        symbol,
+        score,
+        level,
+        rangePct,
+        imbBin: binanceBook.imbalancePct,
+        imbByb: bybitBook.imbalancePct,
+        buyPct,
+        strongExchange,
+        strongImbValue,
+        maxLargestBidPct,
+        maxLargestBidValue
+      });
     }
-
-    if (g < groups.length - 1) await sleep(CONFIG.PAUSE_BETWEEN_GROUPS_MS);
   }
 
-  console.log(`[FINE SCAN] Processati ${totalProcessed} | Segnali ${results.length}`);
-
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, 12);
-}
-
-// ============================= MAIN =============================
-async function main() {
-  const signals = await performScan();
   if (signals.length === 0) {
-    console.log("Nessun segnale questa volta");
+    console.log("Nessun segnale valido");
     return;
   }
 
-  let msg = "<b>🔥 REVERSAL SCAN — MULTI-EXCHANGE (Binance + Bybit Spot + Perp)</b>\n\n";
-  for (const s of signals) {
-    msg += formatSignal(s);
+  signals.sort((a, b) => b.score - a.score);
+
+  let msg = `<b>ACCUMULO SPOT + BID WALL — Range stretto + Bid forte + Absorption</b>\n\n`;
+
+  for (const s of signals.slice(0, 10)) {
+    msg += `<b>${s.symbol}</b> ${s.level}\n`;
+    msg += `Score: <b>${s.score}</b>\n`;
+    msg += `Range 4h: <b>${s.rangePct.toFixed(2)}%</b>\n`;
+    msg += `Bid Binance: <b>${s.imbBin.toFixed(1)}%</b>\n`;
+    msg += `Bid Bybit:   <b>${s.imbByb.toFixed(1)}%</b>\n`;
+    msg += `Book più forte: ${s.strongExchange} (${s.strongImbValue.toFixed(1)}%)\n`;
+    msg += `Market Buy:  <b>${s.buyPct.toFixed(1)}%</b>\n`;
+
+    if (s.maxLargestBidPct >= CONFIG.WALL_BONUS_THRESHOLD_PCT) {
+      msg += `Largest bid wall: <b>${s.maxLargestBidPct.toFixed(1)}%</b> (~$${Math.round(s.maxLargestBidValue).toLocaleString()}) — <i>absorption forte</i>\n`;
+    }
+    msg += `\n`;
   }
 
-  await sendTelegramMessage(msg);
-  console.log(`📤 Inviati ${signals.length} segnali con confluenza multi-exchange`);
+  await sendTelegram(msg);
+  console.log(`→ Inviati ${signals.length} segnali`);
 }
 
-// Avvio
-main();
-setInterval(main, CONFIG.SCAN_INTERVAL_MS);
+// ============================= AVVIO =============================
+scan();
+setInterval(scan, CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
