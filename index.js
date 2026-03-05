@@ -5,11 +5,11 @@ const CONFIG = {
   SCAN_INTERVAL_MIN: 35,
   MIN_QUOTE_VOLUME_USDT: 2_000_000,
   KLINE_INTERVAL: "5m",
-  KLINE_LIMIT: 48,                     // 4 ore esatte
+  KLINE_LIMIT: 48,
   MAX_RANGE_PCT: 2.2,
   MIN_IMBALANCE_ONE_EXCHANGE_PCT: 68,
   MIN_IMBALANCE_OTHER_PCT: 52,
-  MIN_BUY_PRESSURE_PCT: 60,
+  MIN_PRESSURE_PCT: 60,                    // stesso valore per buy e sell pressure
   ORDERBOOK_DEPTH: 50,
   CVD_TRADES_LIMIT: 500,
   MIN_WALL_VALUE_USDT: 30_000,
@@ -49,22 +49,12 @@ function aggregateLevels(levels, isBid = true) {
     const value = price * qty;
 
     let groupedPrice;
-
-    if (price >= 1) {
-      groupedPrice = Math.floor(price * 10) / 10;           // 123.45 → 123.4
-    } else if (price >= 0.1) {
-      groupedPrice = Math.floor(price * 100) / 100;         // 1.2345 → 1.23
-    } else if (price >= 0.01) {
-      groupedPrice = Math.floor(price * 1000) / 1000;       // 0.12345 → 0.123
-    } else if (price >= 0.001) {
-      groupedPrice = Math.floor(price * 10000) / 10000;     // 0.012345 → 0.0123
-    } else if (price >= 0.0001) {
-      groupedPrice = Math.floor(price * 10000) / 10000;     // 0.00012345 → 0.0001  ← quello che volevi
-    } else if (price >= 0.00001) {
-      groupedPrice = Math.floor(price * 100000) / 100000;
-    } else {
-      groupedPrice = Math.floor(price * 1000000) / 1000000;
-    }
+    if (price >= 1) groupedPrice = Math.floor(price * 10) / 10;
+    else if (price >= 0.1) groupedPrice = Math.floor(price * 100) / 100;
+    else if (price >= 0.01) groupedPrice = Math.floor(price * 1000) / 1000;
+    else if (price >= 0.001) groupedPrice = Math.floor(price * 10000) / 10000;
+    else if (price >= 0.0001) groupedPrice = Math.floor(price * 10000) / 10000;
+    else groupedPrice = Math.floor(price * 1000000) / 1000000;
 
     if (!grouped.has(groupedPrice)) grouped.set(groupedPrice, 0);
     grouped.set(groupedPrice, grouped.get(groupedPrice) + value);
@@ -76,7 +66,6 @@ function aggregateLevels(levels, isBid = true) {
 }
 
 // ============================= FUNZIONI DATA =============================
-
 async function getHighVolumeSymbols() {
   try {
     const { data } = await ax.get("https://api.binance.com/api/v3/ticker/24hr");
@@ -124,11 +113,10 @@ async function getOrderbookData(exchange, symbol) {
     let rawBids = exchange === "binance" ? data.bids : (data.result?.b || []);
     let rawAsks = exchange === "binance" ? data.asks : (data.result?.a || []);
 
-    // RAGGRUPPAMENTO CON 1 DECIMALE IN MENO
     const bids = aggregateLevels(rawBids, true);
     const asks = aggregateLevels(rawAsks, false);
 
-    let bidValue = 0, askValue = 0, largestBidValue = 0;
+    let bidValue = 0, askValue = 0, largestBidValue = 0, largestAskValue = 0;
 
     bids.forEach(([p, v]) => {
       bidValue += v;
@@ -137,30 +125,32 @@ async function getOrderbookData(exchange, symbol) {
 
     asks.forEach(([p, v]) => {
       askValue += v;
+      if (v > largestAskValue) largestAskValue = v;
     });
 
     const totalValue = bidValue + askValue;
-    const imbalancePct = totalValue > 0 ? (bidValue / totalValue) * 100 : 0;
-    const largestBidPct = totalValue > 0 ? (largestBidValue / totalValue) * 100 : 0;
 
     return {
-      imbalancePct: Math.min(imbalancePct, 99.9),
-      largestBidPct,
+      bidImbalancePct: totalValue > 0 ? Math.min((bidValue / totalValue) * 100, 99.9) : 0,
+      askImbalancePct: totalValue > 0 ? Math.min((askValue / totalValue) * 100, 99.9) : 0,
+      largestBidPct: totalValue > 0 ? (largestBidValue / totalValue) * 100 : 0,
+      largestAskPct: totalValue > 0 ? (largestAskValue / totalValue) * 100 : 0,
       largestBidValue: Math.round(largestBidValue),
+      largestAskValue: Math.round(largestAskValue),
       totalValue: Math.round(totalValue)
     };
   } catch (err) {
     console.error(`Orderbook error ${symbol} (${exchange}):`, err.message);
     return {
-      imbalancePct: 0,
-      largestBidPct: 0,
-      largestBidValue: 0,
+      bidImbalancePct: 0, askImbalancePct: 0,
+      largestBidPct: 0, largestAskPct: 0,
+      largestBidValue: 0, largestAskValue: 0,
       totalValue: 0
     };
   }
 }
 
-async function getBuyPressurePct(symbol) {
+async function getTradePressure(symbol) {
   try {
     const { data } = await ax.get(
       `https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${CONFIG.CVD_TRADES_LIMIT}`
@@ -169,15 +159,16 @@ async function getBuyPressurePct(symbol) {
     for (const t of data) {
       const qty = parseFloat(t.qty);
       totalVol += qty;
-      if (!t.isBuyerMaker) buyVol += qty;
+      if (!t.isBuyerMaker) buyVol += qty;   // aggressive buy
     }
-    return totalVol > 0 ? (buyVol / totalVol) * 100 : 0;
+    const buyPct = totalVol > 0 ? (buyVol / totalVol) * 100 : 0;
+    return { buyPct, sellPct: 100 - buyPct };
   } catch {
-    return 0;
+    return { buyPct: 0, sellPct: 0 };
   }
 }
 
-function calculateScore(rangePct, imbBin, imbByb, buyPct, maxLargestBidPct, maxLargestBidValue) {
+function calculateScore(rangePct, imbBin, imbByb, pressurePct, maxLargestPct, maxLargestValue) {
   let score = 0;
 
   if      (rangePct <= 0.9)  score += 32;
@@ -193,114 +184,154 @@ function calculateScore(rangePct, imbBin, imbByb, buyPct, maxLargestBidPct, maxL
   else if (maxImb >= 72)     score += 20;
   else if (avgImb  >= 68)    score += 16;
 
-  if      (buyPct >= 66)     score += 25;
-  else if (buyPct >= 62)     score += 20;
-  else if (buyPct >= 58)     score += 14;
+  if      (pressurePct >= 66) score += 25;
+  else if (pressurePct >= 62) score += 20;
+  else if (pressurePct >= 58) score += 14;
 
-  if (maxLargestBidPct >= CONFIG.WALL_BONUS_THRESHOLD_PCT && 
-      maxLargestBidValue >= CONFIG.MIN_WALL_VALUE_USDT) {
+  if (maxLargestPct >= CONFIG.WALL_BONUS_THRESHOLD_PCT && 
+      maxLargestValue >= CONFIG.MIN_WALL_VALUE_USDT) {
     score += 8;
   }
 
   return Math.min(score, 100);
 }
 
-function getLevel(score) {
-  if (score >= 85) return "NUCLEARE 🚀🚀🚀";
-  if (score >= 70) return "OTTIMO 🚀🚀";
-  if (score >= 55) return "BUONO 🚀";
+function getLevel(score, isLong) {
+  const emoji = isLong ? "🔥" : "💣";
+  if (score >= 85) return `NUCLEARE ${emoji}${emoji}${emoji}`;
+  if (score >= 70) return `OTTIMO ${emoji}${emoji}`;
+  if (score >= 55) return `BUONO ${emoji}`;
   return null;
 }
 
 // ============================= SCAN =============================
 async function scan() {
-  console.log(`[SCAN ${new Date().toISOString()}] Ricerca accumulo spot + bid wall`);
+  console.log(`[SCAN ${new Date().toISOString()}] Ricerca accumulo LONG 🔥 + distribuzione SHORT 💣`);
 
   const symbols = await getHighVolumeSymbols();
   console.log(`→ ${symbols.length} simboli volume OK`);
 
-  const signals = [];
+  const longSignals = [];
+  const shortSignals = [];
 
   for (const symbol of symbols) {
-    const [rangePct, binanceBook, bybitBook, buyPct] = await Promise.all([
+    const [rangePct, binanceBook, bybitBook, pressure] = await Promise.all([
       get4hRangePercent(symbol),
       getOrderbookData("binance", symbol),
       getOrderbookData("bybit", symbol),
-      getBuyPressurePct(symbol),
+      getTradePressure(symbol),
     ]);
 
     await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
 
     if (rangePct > CONFIG.MAX_RANGE_PCT) continue;
 
-    const maxImb = Math.max(binanceBook.imbalancePct, bybitBook.imbalancePct);
-    const minImb = Math.min(binanceBook.imbalancePct, bybitBook.imbalancePct);
+    // ====================== LONG (bid wall + buy pressure) ======================
+    const maxBidImb = Math.max(binanceBook.bidImbalancePct, bybitBook.bidImbalancePct);
+    const minBidImb = Math.min(binanceBook.bidImbalancePct, bybitBook.bidImbalancePct);
 
-    if (maxImb < CONFIG.MIN_IMBALANCE_ONE_EXCHANGE_PCT) continue;
-    if (minImb < CONFIG.MIN_IMBALANCE_OTHER_PCT) continue;
+    if (maxBidImb >= CONFIG.MIN_IMBALANCE_ONE_EXCHANGE_PCT &&
+        minBidImb >= CONFIG.MIN_IMBALANCE_OTHER_PCT &&
+        pressure.buyPct >= CONFIG.MIN_PRESSURE_PCT) {
 
-    if (buyPct < CONFIG.MIN_BUY_PRESSURE_PCT) continue;
+      const maxLargestBidPct  = Math.max(binanceBook.largestBidPct, bybitBook.largestBidPct);
+      const maxLargestBidValue = Math.max(binanceBook.largestBidValue, bybitBook.largestBidValue);
 
-    const maxLargestBidPct  = Math.max(binanceBook.largestBidPct, bybitBook.largestBidPct);
-    const maxLargestBidValue = Math.max(binanceBook.largestBidValue, bybitBook.largestBidValue);
+      const score = calculateScore(rangePct, binanceBook.bidImbalancePct, bybitBook.bidImbalancePct, pressure.buyPct, maxLargestBidPct, maxLargestBidValue);
+      const level = getLevel(score, true);
 
-    const score = calculateScore(
-      rangePct,
-      binanceBook.imbalancePct,
-      bybitBook.imbalancePct,
-      buyPct,
-      maxLargestBidPct,
-      maxLargestBidValue
-    );
+      if (level) {
+        const strongExchange = binanceBook.bidImbalancePct > bybitBook.bidImbalancePct ? "Binance" : "Bybit";
+        longSignals.push({
+          symbol, score, level, rangePct,
+          imbBin: binanceBook.bidImbalancePct,
+          imbByb: bybitBook.bidImbalancePct,
+          pressure: pressure.buyPct,
+          strongExchange,
+          maxWallPct: maxLargestBidPct,
+          maxWallValue: maxLargestBidValue
+        });
+      }
+    }
 
-    const level = getLevel(score);
+    // ====================== SHORT (ask wall + sell pressure) ======================
+    const maxAskImb = Math.max(binanceBook.askImbalancePct, bybitBook.askImbalancePct);
+    const minAskImb = Math.min(binanceBook.askImbalancePct, bybitBook.askImbalancePct);
 
-    if (level) {
-      const strongExchange = binanceBook.imbalancePct > bybitBook.imbalancePct ? "Binance" : "Bybit";
-      const strongImbValue = Math.max(binanceBook.imbalancePct, bybitBook.imbalancePct);
+    if (maxAskImb >= CONFIG.MIN_IMBALANCE_ONE_EXCHANGE_PCT &&
+        minAskImb >= CONFIG.MIN_IMBALANCE_OTHER_PCT &&
+        pressure.sellPct >= CONFIG.MIN_PRESSURE_PCT) {
 
-      signals.push({
-        symbol,
-        score,
-        level,
-        rangePct,
-        imbBin: binanceBook.imbalancePct,
-        imbByb: bybitBook.imbalancePct,
-        buyPct,
-        strongExchange,
-        strongImbValue,
-        maxLargestBidPct,
-        maxLargestBidValue
-      });
+      const maxLargestAskPct  = Math.max(binanceBook.largestAskPct, bybitBook.largestAskPct);
+      const maxLargestAskValue = Math.max(binanceBook.largestAskValue, bybitBook.largestAskValue);
+
+      const score = calculateScore(rangePct, binanceBook.askImbalancePct, bybitBook.askImbalancePct, pressure.sellPct, maxLargestAskPct, maxLargestAskValue);
+      const level = getLevel(score, false);
+
+      if (level) {
+        const strongExchange = binanceBook.askImbalancePct > bybitBook.askImbalancePct ? "Binance" : "Bybit";
+        shortSignals.push({
+          symbol, score, level, rangePct,
+          imbBin: binanceBook.askImbalancePct,
+          imbByb: bybitBook.askImbalancePct,
+          pressure: pressure.sellPct,
+          strongExchange,
+          maxWallPct: maxLargestAskPct,
+          maxWallValue: maxLargestAskValue
+        });
+      }
     }
   }
 
-  if (signals.length === 0) {
+  if (longSignals.length === 0 && shortSignals.length === 0) {
     console.log("Nessun segnale valido");
     return;
   }
 
-  signals.sort((a, b) => b.score - a.score);
+  longSignals.sort((a, b) => b.score - a.score);
+  shortSignals.sort((a, b) => b.score - a.score);
 
-  let msg = `<b>ACCUMULO SPOT</b>\n\n`;
+  let msg = `<b>🔥 ACCUMULO LONG + 💣 SHORT</b>\n\n`;
 
-  for (const s of signals.slice(0, 10)) {
-    msg += `<b>${s.symbol}</b> ${s.level}\n`;
-    msg += `Score: <b>${s.score}</b>\n`;
-    msg += `Range 4h: <b>${s.rangePct.toFixed(2)}%</b>\n`;
-    msg += `Bid Binance: <b>${s.imbBin.toFixed(1)}%</b>\n`;
-    msg += `Bid Bybit:   <b>${s.imbByb.toFixed(1)}%</b>\n`;
-    msg += `Book più forte: ${s.strongExchange} (${s.strongImbValue.toFixed(1)}%)\n`;
-    msg += `Market Buy:  <b>${s.buyPct.toFixed(1)}%</b>\n`;
-
-    if (s.maxLargestBidPct >= CONFIG.WALL_BONUS_THRESHOLD_PCT) {
-      msg += `Largest bid wall: <b>${s.maxLargestBidPct.toFixed(1)}%</b> (~$${Math.round(s.maxLargestBidValue).toLocaleString()}) — <i>absorption forte</i>\n`;
+  // LONG SECTION
+  if (longSignals.length > 0) {
+    msg += `<b>🔥 LONG (Bid Wall + Buy Pressure)</b>\n\n`;
+    for (const s of longSignals.slice(0, 10)) {
+      msg += `<b>${s.symbol}</b> ${s.level}\n`;
+      msg += `Score: <b>${s.score}</b>\n`;
+      msg += `Range 4h: <b>${s.rangePct.toFixed(2)}%</b>\n`;
+      msg += `Bid Binance: <b>${s.imbBin.toFixed(1)}%</b>\n`;
+      msg += `Bid Bybit:   <b>${s.imbByb.toFixed(1)}%</b>\n`;
+      msg += `Book più forte: ${s.strongExchange}\n`;
+      msg += `Market Buy:  <b>${s.pressure.toFixed(1)}%</b>\n`;
+      if (s.maxWallPct >= CONFIG.WALL_BONUS_THRESHOLD_PCT) {
+        msg += `Largest bid wall: <b>${s.maxWallPct.toFixed(1)}%</b> (~$${s.maxWallValue.toLocaleString()}) — <i>absorption forte</i>\n`;
+      }
+      msg += `\n`;
     }
-    msg += `\n`;
+  }
+
+  // SHORT SECTION
+  if (shortSignals.length > 0) {
+    if (longSignals.length > 0) msg += `────────────────────\n\n`;
+    msg += `<b>💣 SHORT (Ask Wall + Sell Pressure)</b>\n\n`;
+    for (const s of shortSignals.slice(0, 10)) {
+      msg += `<b>${s.symbol}</b> ${s.level}\n`;
+      msg += `Score: <b>${s.score}</b>\n`;
+      msg += `Range 4h: <b>${s.rangePct.toFixed(2)}%</b>\n`;
+      msg += `Ask Binance: <b>${s.imbBin.toFixed(1)}%</b>\n`;
+      msg += `Ask Bybit:   <b>${s.imbByb.toFixed(1)}%</b>\n`;
+      msg += `Book più forte: ${s.strongExchange}\n`;
+      msg += `Market Sell: <b>${s.pressure.toFixed(1)}%</b>\n`;
+      if (s.maxWallPct >= CONFIG.WALL_BONUS_THRESHOLD_PCT) {
+        msg += `Largest ask wall: <b>${s.maxWallPct.toFixed(1)}%</b> (~$${s.maxWallValue.toLocaleString()}) — <i>vendita forte</i>\n`;
+      }
+      msg += `\n`;
+    }
   }
 
   await sendTelegram(msg);
-  console.log(`→ Inviati ${signals.length} segnali`);
+  console.log(`→ Inviati ${longSignals.length} Long 🔥 + ${shortSignals.length} Short 💣`);
 }
 
 // ============================= AVVIO =============================
