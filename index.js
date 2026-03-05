@@ -282,7 +282,7 @@ async function scan() {
 
   signals.sort((a, b) => b.score - a.score);
 
-  let msg = `<b>ACCUMULO SPOT + BID WALL — Range stretto + Bid forte + Absorption</b>\n\n`;
+  let msg = `<b>ACCUMULO SPOT</b>\n\n`;
 
   for (const s of signals.slice(0, 10)) {
     msg += `<b>${s.symbol}</b> ${s.level}\n`;
