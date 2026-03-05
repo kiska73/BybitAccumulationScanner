@@ -1,312 +1,419 @@
 const axios = require("axios");
 
 // =============================
-// CONFIGURAZIONE
+// CONFIG
 // =============================
+
 const CONFIG = {
+
   SCAN_INTERVAL_MIN: 20,
   MIN_TURNOVER_USDT: 2_000_000,
+
   ORDERBOOK_DEPTH: 200,
   CVD_TRADES_LIMIT: 1000,
+
   REQUEST_TIMEOUT_MS: 10000,
-  SLEEP_BETWEEN_SYMBOLS_MS: 800,     // più lento → più gentile con le API
-  SLEEP_BETWEEN_BATCHES_MS: 2000,
+
+  SLEEP_BETWEEN_SYMBOLS_MS: 700
+
 };
 
 // =============================
 // TELEGRAM
 // =============================
-const TELEGRAM_BOT_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s';
-const TELEGRAM_CHAT_ID   = '820279313';
+
+const TELEGRAM_BOT_TOKEN = '6916198243:AAFTF66uLYSeqviL5YnfGtbUkSjTwPzah6s'; 
+const TELEGRAM_CHAT_ID = '820279313';
 
 async function sendTelegramMessage(text) {
+
   try {
+
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
       {
         chat_id: TELEGRAM_CHAT_ID,
         text: text,
-        parse_mode: "HTML",
-      },
-      { timeout: 8000 }
+        parse_mode: "HTML"
+      }
     );
+
   } catch (err) {
-    console.error("Errore invio Telegram:", err.message);
+
+    console.log("Telegram error:", err.message);
+
   }
+
 }
 
 // =============================
-// UTILITÀ
+// UTILS
 // =============================
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 const axiosInstance = axios.create({
-  timeout: CONFIG.REQUEST_TIMEOUT_MS,
+  timeout: CONFIG.REQUEST_TIMEOUT_MS
 });
 
 // =============================
-// FUNZIONI DI DATO
+// MEMORIA SEGNALI
 // =============================
+
+const activeSignals = new Map();
+
+// =============================
+// FILTRO STABLE
+// =============================
+
+const STABLES = [
+  "USDC",
+  "BUSD",
+  "FDUSD",
+  "TUSD",
+  "USDP",
+  "DAI",
+  "UST",
+  "USTC",
+  "USDD"
+];
+
+// =============================
+// DATA FUNCTIONS
+// =============================
+
 async function getCVD(symbol) {
+
   try {
+
     const res = await axiosInstance.get(
       `https://api.binance.com/api/v3/trades?symbol=${symbol}&limit=${CONFIG.CVD_TRADES_LIMIT}`
     );
-    let delta = 0;
-    let totalVolume = 0;
 
-    for (const trade of res.data) {
-      const qty = parseFloat(trade.qty);
-      totalVolume += qty;
-      delta += trade.isBuyerMaker ? -qty : qty;
+    let delta = 0;
+    let total = 0;
+
+    for (const t of res.data) {
+
+      const qty = parseFloat(t.qty);
+
+      total += qty;
+
+      delta += t.isBuyerMaker ? -qty : qty;
+
     }
 
-    return totalVolume > 0 ? delta / totalVolume : 0;
-  } catch (err) {
-    console.log(`${symbol} → CVD error: ${err.message}`);
+    return total > 0 ? delta / total : 0;
+
+  } catch {
+
     return 0;
+
   }
+
 }
 
+// =============================
+
 async function getOrderbookImbalance(symbol) {
+
   try {
+
     const res = await axiosInstance.get(
       `https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=${CONFIG.ORDERBOOK_DEPTH}`
     );
 
-    let bidsVolume = 0;
-    let asksVolume = 0;
+    let bids = 0;
+    let asks = 0;
 
-    for (const bid of res.data.bids) bidsVolume += parseFloat(bid[1]);
-    for (const ask of res.data.asks) asksVolume += parseFloat(ask[1]);
+    for (const b of res.data.bids) bids += parseFloat(b[1]);
+    for (const a of res.data.asks) asks += parseFloat(a[1]);
 
-    const total = bidsVolume + asksVolume;
-    const imbalance = total > 0 ? (bidsVolume - asksVolume) / total : 0;
+    const total = bids + asks;
 
-    return {
-      imbalance,
-      bids: bidsVolume,
-      asks: asksVolume,
-    };
-  } catch (err) {
-    console.log(`${symbol} → Orderbook error: ${err.message}`);
+    const imbalance = total > 0 ? (bids - asks) / total : 0;
+
+    return { imbalance, bids, asks };
+
+  } catch {
+
     return { imbalance: 0, bids: 0, asks: 0 };
+
   }
+
 }
 
+// =============================
+
 async function getVolatilityPercent(symbol) {
+
   try {
+
     const res = await axiosInstance.get(
       `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=15m&limit=48`
     );
 
-    let highest = -Infinity;
-    let lowest = Infinity;
+    let high = -Infinity;
+    let low = Infinity;
 
-    for (const kline of res.data) {
-      const high = parseFloat(kline[2]);
-      const low  = parseFloat(kline[3]);
-      if (high > highest) highest = high;
-      if (low  < lowest)  lowest  = low;
+    for (const k of res.data) {
+
+      const h = parseFloat(k[2]);
+      const l = parseFloat(k[3]);
+
+      if (h > high) high = h;
+      if (l < low) low = l;
+
     }
 
-    const range = (highest - lowest) / lowest * 100;
-    return isFinite(range) ? range : 100;
+    return ((high - low) / low) * 100;
+
   } catch {
-    return 100;
+
+    return 0;
+
   }
+
 }
 
-async function getLatestFundingRate(symbol) {
+// =============================
+
+async function getFunding(symbol) {
+
   try {
+
     const res = await axiosInstance.get(
       `https://api.bybit.com/v5/market/funding/history?category=linear&symbol=${symbol}&limit=1`
     );
-    return parseFloat(res.data.result.list[0].fundingRate) || 0;
+
+    return parseFloat(res.data.result.list[0].fundingRate);
+
   } catch {
+
     return 0;
+
   }
+
 }
 
-async function getOIChangePercent(symbol) {
+// =============================
+
+async function getOIChange(symbol) {
+
   try {
+
     const res = await axiosInstance.get(
       `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=15min&limit=2`
     );
 
-    const current = parseFloat(res.data.result.list[0].openInterest);
-    const previous = parseFloat(res.data.result.list[1].openInterest);
+    const cur = parseFloat(res.data.result.list[0].openInterest);
+    const prev = parseFloat(res.data.result.list[1].openInterest);
 
-    return previous > 0 ? (current - previous) / previous * 100 : 0;
+    return prev > 0 ? ((cur - prev) / prev) * 100 : 0;
+
   } catch {
+
     return 0;
+
   }
+
 }
 
 // =============================
-// DETECTION RULES
+// SCORE
 // =============================
-function detectLiquidityWall(book) {
-  const ratio = Math.max(book.bids, book.asks) / Math.min(book.bids, book.asks);
-  return ratio > 3 ? "LIQUIDITY WALL" : null;
-}
 
-function detectSpoofing(book) {
-  return Math.abs(book.imbalance) > 0.9 ? "SPOOFING SUSPECTED" : null;
-}
-
-function detectWhaleAbsorption(cvd, rangePercent) {
-  return Math.abs(cvd) > 0.2 && rangePercent < 2 ? "WHALE ABSORPTION" : null;
-}
-
-function detectSqueezeRisk(funding, oiChange, cvd) {
-  if (funding > 0.001 && oiChange > 2 && cvd < 0) return "LONG SQUEEZE RISK";
-  if (funding < -0.001 && oiChange > 2 && cvd > 0) return "SHORT SQUEEZE RISK";
-  return null;
-}
-
-// =============================
-// SCORING
-// =============================
 function calculateScore(data) {
+
   let score = 0;
-  score += Math.abs(data.cvd)          * 40;
-  score += Math.abs(data.book)          * 30;
-  score += Math.max(0, 20 - data.range) * 1.5;
-  score += Math.abs(data.oiChange)      * 5;
-  if (data.funding < 0) score += 5;
 
-  return Math.min(100, score);
+  score += Math.abs(data.cvd) * 45;
+  score += Math.abs(data.book) * 25;
+  score += Math.abs(data.oiChange) * 12;
+
+  if (data.oiChange > 3) score += 6;
+  if (Math.abs(data.cvd) > 0.35) score += 6;
+  if (Math.abs(data.book) > 0.25) score += 4;
+
+  if (data.funding < 0) score += 3;
+
+  return Math.min(score, 100);
+
 }
 
-function classifyScore(score) {
+// =============================
+// CLASSIFY
+// =============================
+
+function classify(score) {
+
   if (score > 85) return "EXPLOSION";
-  if (score > 65) return "BUILDING";
-  if (score > 45) return "ACCUMULATION";
+  if (score > 70) return "BUILDING";
+  if (score > 60) return "ACCUMULATION";
+
   return null;
+
 }
 
 // =============================
-// FORMATTING
+// FORMAT
 // =============================
-function formatSignal(r) {
-  let msg = `<b>${r.symbol}</b>\n`;
-  msg += `${r.type}\n`;
-  msg += `Score: <b>${r.score.toFixed(0)}</b>\n`;
-  msg += `CVD: ${(r.cvd * 100).toFixed(1)}%\n`;
-  msg += `Book: ${(r.book * 100).toFixed(1)}%\n`;
-  msg += `OI Δ: ${r.oiChange.toFixed(1)}%\n`;
-  msg += `Funding: ${r.funding.toFixed(5)}\n`;
 
-  if (r.squeeze) msg += `${r.squeeze}\n`;
-  if (r.whale)   msg += `${r.whale}\n`;
-  if (r.wall)    msg += `${r.wall}\n`;
-  if (r.spoof)   msg += `${r.spoof}\n`;
+function formatSignal(s) {
 
-  msg += "\n";
+  let msg = `<b>${s.symbol}</b>\n`;
+
+  msg += `${s.type}\n`;
+  msg += `Score: <b>${s.score.toFixed(0)}</b>\n`;
+  msg += `CVD: ${(s.cvd * 100).toFixed(1)}%\n`;
+  msg += `Book: ${(s.book * 100).toFixed(1)}%\n`;
+  msg += `OI Δ: ${s.oiChange.toFixed(1)}%\n`;
+  msg += `Funding: ${s.funding.toFixed(5)}\n\n`;
+
   return msg;
+
 }
 
 // =============================
-// SCAN PRINCIPALE
+// SCAN
 // =============================
+
 async function performScan() {
-  console.log(`[${new Date().toISOString()}] Inizio scan...`);
 
-  let tickers;
-  try {
-    const res = await axiosInstance.get("https://api.binance.com/api/v3/ticker/24hr");
-    tickers = res.data;
-  } catch (err) {
-    console.error("Impossibile scaricare tickers:", err.message);
-    return [];
-  }
+  console.log("Starting scan");
 
-  const candidates = tickers
+  const res = await axiosInstance.get(
+    "https://api.binance.com/api/v3/ticker/24hr"
+  );
+
+  const tickers = res.data;
+
+  const symbols = tickers
     .filter(t => t.symbol.endsWith("USDT"))
-    .filter(t => parseFloat(t.quoteVolume) >= CONFIG.MIN_TURNOVER_USDT)
+    .filter(t => parseFloat(t.quoteVolume) > CONFIG.MIN_TURNOVER_USDT)
+    .filter(t => !STABLES.some(s => t.symbol.includes(s)))
     .map(t => t.symbol);
-
-  console.log(`Trovati ${candidates.length} simboli con volume ≥ ${CONFIG.MIN_TURNOVER_USDT}`);
 
   const results = [];
 
-  for (const symbol of candidates) {
-    try {
-      const [cvd, book, range, funding, oiChange] = await Promise.all([
-        getCVD(symbol),
-        getOrderbookImbalance(symbol),
-        getVolatilityPercent(symbol),
-        getLatestFundingRate(symbol),
-        getOIChangePercent(symbol),
-      ]);
+  for (const symbol of symbols) {
 
-      const data = {
-        cvd: cvd,
-        book: book.imbalance,
-        range: range,
-        funding: funding,
-        oiChange: oiChange,
-      };
+    const [cvd, book, range, funding, oiChange] = await Promise.all([
+      getCVD(symbol),
+      getOrderbookImbalance(symbol),
+      getVolatilityPercent(symbol),
+      getFunding(symbol),
+      getOIChange(symbol)
+    ]);
 
-      const score = calculateScore(data);
-      const type = classifyScore(score);
+    // anti noise
 
-      if (!type) {
-        await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
-        continue;
-      }
+    if (Math.abs(cvd) < 0.12) continue;
+    if (Math.abs(book.imbalance) < 0.08) continue;
+    if (Math.abs(oiChange) < 0.7) continue;
+    if (range < 1.2) continue;
 
-      const signal = {
+    const score = calculateScore({
+      cvd,
+      book: book.imbalance,
+      oiChange,
+      funding
+    });
+
+    const type = classify(score);
+
+    if (!type) continue;
+
+    const existing = activeSignals.get(symbol);
+
+    if (!existing) {
+
+      activeSignals.set(symbol, {
+        updates: 1,
+        lastOI: oiChange
+      });
+
+      results.push({
         symbol,
-        score,
         type,
+        score,
         cvd,
         book: book.imbalance,
-        range,
-        funding,
         oiChange,
-        squeeze: detectSqueezeRisk(funding, oiChange, cvd),
-        whale: detectWhaleAbsorption(cvd, range),
-        wall: detectLiquidityWall(book),
-        spoof: detectSpoofing(book),
-      };
+        funding
+      });
 
-      results.push(signal);
+    } else {
 
-      console.log(`${symbol} → ${type} (score ${score.toFixed(0)})`);
-    } catch (err) {
-      console.log(`${symbol} → errore generico: ${err.message}`);
+      if (existing.updates < 10) {
+
+        if (Math.abs(oiChange - existing.lastOI) > 0.5) {
+
+          existing.updates++;
+
+          existing.lastOI = oiChange;
+
+          results.push({
+            symbol,
+            type: "UPDATE",
+            score,
+            cvd,
+            book: book.imbalance,
+            oiChange,
+            funding
+          });
+
+        }
+
+      }
+
     }
 
     await sleep(CONFIG.SLEEP_BETWEEN_SYMBOLS_MS);
+
   }
 
   results.sort((a, b) => b.score - a.score);
+
   return results.slice(0, 10);
+
 }
 
 // =============================
-// MAIN LOOP
+// MAIN
 // =============================
+
 async function main() {
+
   const signals = await performScan();
 
-  if (signals.length > 0) {
-    let message = "<b>REVERSAL EXPLOSION SCAN</b>\n\n";
-    for (const sig of signals) {
-      message += formatSignal(sig);
-    }
-    await sendTelegramMessage(message);
-    console.log(`Inviato ${signals.length} segnali`);
-  } else {
-    console.log("Nessun segnale significativo");
+  if (signals.length === 0) {
+
+    console.log("No signals");
+
+    return;
+
   }
+
+  let msg = "<b>REVERSAL EXPLOSION SCAN</b>\n\n";
+
+  for (const s of signals) {
+
+    msg += formatSignal(s);
+
+  }
+
+  await sendTelegramMessage(msg);
+
 }
 
-// Avvia subito e poi ogni X minuti
+// =============================
+
 main();
 
-setInterval(main, CONFIG.SCAN_INTERVAL_MIN * 60 * 1000);
+setInterval(
+  main,
+  CONFIG.SCAN_INTERVAL_MIN * 60 * 1000
+);
