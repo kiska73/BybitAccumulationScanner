@@ -2,7 +2,7 @@ const axios = require("axios");
 
 // ============================= CONFIG =============================
 const CONFIG = {
-  SCAN_INTERVAL_MIN: 35,
+  SCAN_INTERVAL_MIN: 33,
   MIN_QUOTE_VOLUME_USDT: 2_000_000,
 
   KLINE_INTERVAL: "15m",
