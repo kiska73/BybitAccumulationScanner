@@ -14,13 +14,15 @@ const CONFIG = {
 
   MIN_PRESSURE_PCT: 60,
 
-  ORDERBOOK_DEPTH: 100,
-  CVD_TRADES_LIMIT: 1000,
+  ORDERBOOK_DEPTH: 50,
+  CVD_TRADES_LIMIT: 500,
 
   MIN_WALL_VALUE_USDT: 30000,
   WALL_BONUS_THRESHOLD_PCT: 6,
 
   MAX_WALL_DISTANCE_PCT: 1.0,   // distanza massima wall dal prezzo
+
+  ABSORPTION_RANGE_PCT: 1.2,    // nuovo: threshold per absorption bonus
 
   REQUEST_TIMEOUT_MS: 8000,
   SLEEP_BETWEEN_SYMBOLS_MS: 300
@@ -273,6 +275,11 @@ function score(range,imb1,imb2,pressure,wallPct){
 
   if(wallPct>=CONFIG.WALL_BONUS_THRESHOLD_PCT)s+=10;
 
+  // absorption bonus
+  if(range <= CONFIG.ABSORPTION_RANGE_PCT && pressure >= 65){
+    s += 15;
+  }
+
   return Math.min(s,100);
 
 }
@@ -452,7 +459,7 @@ async function scan(){
 
   if(longSignals.length){
 
-    msg+="🔥 <b>ACCUMULO LONG (Bid Wall + Buy Pressure)</b>\n\n";
+    msg+="🔥 <b>LONG (Bid Wall + Buy Pressure)</b>\n\n";
 
     longSignals.sort((a,b)=>b.score-a.score);
 
@@ -473,7 +480,7 @@ async function scan(){
 
   if(shortSignals.length){
 
-    msg+="💣 <b>DISTRIBUZIONE SHORT (Ask Wall + Sell Pressure)</b>\n\n";
+    msg+="💣 <b>SHORT (Ask Wall + Sell Pressure)</b>\n\n";
 
     shortSignals.sort((a,b)=>b.score-a.score);
 
