@@ -328,21 +328,46 @@ async function scan(){
         pressure.buyPct>=CONFIG.MIN_PRESSURE_PCT
       ){
 
-        const sc=score(
-          range,
-          binance.bidImbalancePct,
-          bybit.bidImbalancePct,
-          pressure.buyPct,
-          Math.max(binance.largestBidPct,bybit.largestBidPct)
+        const strongestBook =
+          binance.bidImbalancePct > bybit.bidImbalancePct
+            ? "Binance"
+            : "Bybit";
+
+        const largestWallValue =
+          binance.largestBidValue > bybit.largestBidValue
+            ? binance.largestBidValue
+            : bybit.largestBidValue;
+
+        const largestWallPct = Math.max(
+          binance.largestBidPct,
+          bybit.largestBidPct
         );
 
-        if(sc>=55){
+        if(largestWallValue >= CONFIG.MIN_WALL_VALUE_USDT){
 
-          longSignals.push({
-            symbol,
-            score:sc,
-            pressure:pressure.buyPct
-          });
+          const sc=score(
+            range,
+            binance.bidImbalancePct,
+            bybit.bidImbalancePct,
+            pressure.buyPct,
+            largestWallPct
+          );
+
+          if(sc>=55){
+
+            longSignals.push({
+              symbol,
+              score: sc,
+              range,
+              binanceBid: binance.bidImbalancePct,
+              bybitBid: bybit.bidImbalancePct,
+              pressure: pressure.buyPct,
+              strongestBook,
+              wallValue: largestWallValue,
+              wallPct: largestWallPct
+            });
+
+          }
 
         }
 
@@ -369,21 +394,46 @@ async function scan(){
         pressure.sellPct>=CONFIG.MIN_PRESSURE_PCT
       ){
 
-        const sc=score(
-          range,
-          binance.askImbalancePct,
-          bybit.askImbalancePct,
-          pressure.sellPct,
-          Math.max(binance.largestAskPct,bybit.largestAskPct)
+        const strongestBook =
+          binance.askImbalancePct > bybit.askImbalancePct
+            ? "Binance"
+            : "Bybit";
+
+        const largestWallValue =
+          binance.largestAskValue > bybit.largestAskValue
+            ? binance.largestAskValue
+            : bybit.largestAskValue;
+
+        const largestWallPct = Math.max(
+          binance.largestAskPct,
+          bybit.largestAskPct
         );
 
-        if(sc>=55){
+        if(largestWallValue >= CONFIG.MIN_WALL_VALUE_USDT){
 
-          shortSignals.push({
-            symbol,
-            score:sc,
-            pressure:pressure.sellPct
-          });
+          const sc=score(
+            range,
+            binance.askImbalancePct,
+            bybit.askImbalancePct,
+            pressure.sellPct,
+            largestWallPct
+          );
+
+          if(sc>=55){
+
+            shortSignals.push({
+              symbol,
+              score: sc,
+              range,
+              binanceAsk: binance.askImbalancePct,
+              bybitAsk: bybit.askImbalancePct,
+              pressure: pressure.sellPct,
+              strongestBook,
+              wallValue: largestWallValue,
+              wallPct: largestWallPct
+            });
+
+          }
 
         }
 
@@ -398,28 +448,46 @@ async function scan(){
     return;
   }
 
-  let msg="<b>Scanner Accumulo / Distribuzione</b>\n\n";
+  let msg="<b>🔥 ACCUMULO LONG + 💣 SHORT</b>\n\n";
 
   if(longSignals.length){
 
-    msg+="🔥 <b>LONG</b>\n";
+    msg+="🔥 <b>ACCUMULO LONG (Bid Wall + Buy Pressure)</b>\n\n";
 
     longSignals.sort((a,b)=>b.score-a.score);
 
     longSignals.slice(0,10).forEach(s=>{
-      msg+=`${s.symbol} | score ${s.score} | buy ${s.pressure.toFixed(1)}%\n`;
+
+      msg+=`<b>${s.symbol}</b>\n`;
+      msg+=`Score: ${s.score}\n`;
+      msg+=`Range 4h: ${s.range.toFixed(2)}%\n`;
+      msg+=`Bid Binance: ${s.binanceBid.toFixed(1)}%\n`;
+      msg+=`Bid Bybit: ${s.bybitBid.toFixed(1)}%\n`;
+      msg+=`Book più forte: ${s.strongestBook}\n`;
+      msg+=`Market Buy: ${s.pressure.toFixed(1)}%\n`;
+      msg+=`Largest bid wall: ${s.wallPct.toFixed(1)}% (~$${s.wallValue.toLocaleString()})\n\n`;
+
     });
 
   }
 
   if(shortSignals.length){
 
-    msg+="\n💣 <b>SHORT</b>\n";
+    msg+="💣 <b>DISTRIBUZIONE SHORT (Ask Wall + Sell Pressure)</b>\n\n";
 
     shortSignals.sort((a,b)=>b.score-a.score);
 
     shortSignals.slice(0,10).forEach(s=>{
-      msg+=`${s.symbol} | score ${s.score} | sell ${s.pressure.toFixed(1)}%\n`;
+
+      msg+=`<b>${s.symbol}</b>\n`;
+      msg+=`Score: ${s.score}\n`;
+      msg+=`Range 4h: ${s.range.toFixed(2)}%\n`;
+      msg+=`Ask Binance: ${s.binanceAsk.toFixed(1)}%\n`;
+      msg+=`Ask Bybit: ${s.bybitAsk.toFixed(1)}%\n`;
+      msg+=`Book più forte: ${s.strongestBook}\n`;
+      msg+=`Market Sell: ${s.pressure.toFixed(1)}%\n`;
+      msg+=`Largest ask wall: ${s.wallPct.toFixed(1)}% (~$${s.wallValue.toLocaleString()})\n\n`;
+
     });
 
   }
